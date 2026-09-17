@@ -1,0 +1,45 @@
+name: Ilus APK Auto Builder
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Repozitoriyanı endir
+        uses: actions/checkout@v4
+
+      - name: Python mühitini quraşdır
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Asılılıqları yüklə (requirements.txt və ya standart kitabxanalar)
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install requests termcolor PySide6
+          fi
+
+      - name: Ilus İnterpreterini işə sal
+        run: |
+          python3 ilus_pyside.py
+
+      - name: Qovluqdakı faylları yoxla (Debug)
+        run: |
+          ls -la
+
+      - name: Yaradılmış APK faylını saxla (Artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ilus-app-apk
+          path: |
+            *.apk
+            **/*.apk
+          if-no-files-found: warn
