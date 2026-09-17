@@ -18,7 +18,18 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Asılılıqları yüklə (requirements.txt və ya standart kitabxanalar)
+      - name: GUI və Qt üçün Linux Sistem Kitabxanalarını Quraşdır
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libegl1 \
+            libgl1-mesa-glx \
+            libxcb-xinerama0 \
+            libdbus-1-3 \
+            libxkbcommon-x11-0 \
+            libglib2.0-0
+
+      - name: Python Kitabxanalarını Yüklə
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then
@@ -30,10 +41,6 @@ jobs:
       - name: Ilus İnterpreterini işə sal
         run: |
           python3 ilus_pyside.py
-
-      - name: Qovluqdakı faylları yoxla (Debug)
-        run: |
-          ls -la
 
       - name: Yaradılmış APK faylını saxla (Artifact)
         uses: actions/upload-artifact@v4
