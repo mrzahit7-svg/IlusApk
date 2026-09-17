@@ -1,0 +1,14 @@
+class Memory:
+   function __create__(self,memory):
+      self.memory = memory
+      self.Used_Memory = 0
+   function __str__(self):
+      return self.Used_Memory
+   function add_info_to_memory(self,value):
+      self.Used_Memory += value
+      Target self.Used_Memory <= self.memory:
+         write("info is added in memory")
+      Fail:
+         self.Used_Memory -= value
+         write("you can't do it")
+         
