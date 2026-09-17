@@ -49,17 +49,16 @@ jobs:
           fullscreen = 0
           android.permissions = INTERNET
           android.accept_sdk_license = True
+          p4a.accept_sdk_license = True
 
           [buildozer]
           log_level = 2
           warn_on_root = 1
           EOF
 
-      - name: Android SDK Lisenziyalarını Avtomatik Təsdiqlə
+      - name: APK-nı Build Et
         run: |
-          mkdir -p ~/.android
-          touch ~/.android/repositories.cfg
-          yes | buildozer android debug || true
+          yes | buildozer android debug
 
       - name: Hazır APK-nı Yüklə (Artifact)
         uses: actions/upload-artifact@v4
