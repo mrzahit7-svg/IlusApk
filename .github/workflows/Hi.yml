@@ -40,9 +40,9 @@ jobs:
             pip install requests termcolor PySide6
           fi
 
-      - name: Ilus İnterpreterini işə sal
+      - name: Mühərriki İşə Sal və APK-ya Çevir
         run: |
-          xvfb-run python3 ilus_pyside.py
+          xvfb-run python3 ilus_pyside.py main.ilus
 
       - name: Yaradılmış APK faylını saxla (Artifact)
         uses: actions/upload-artifact@v4
