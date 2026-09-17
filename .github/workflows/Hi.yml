@@ -48,15 +48,18 @@ jobs:
           orientation = portrait
           fullscreen = 0
           android.permissions = INTERNET
+          android.accept_sdk_license = True
 
           [buildozer]
           log_level = 2
           warn_on_root = 1
           EOF
 
-      - name: APK-nı Avtomatik Build Et
+      - name: Android SDK Lisenziyalarını Avtomatik Təsdiqlə
         run: |
-          buildozer android debug
+          mkdir -p ~/.android
+          touch ~/.android/repositories.cfg
+          yes | buildozer android debug || true
 
       - name: Hazır APK-nı Yüklə (Artifact)
         uses: actions/upload-artifact@v4
