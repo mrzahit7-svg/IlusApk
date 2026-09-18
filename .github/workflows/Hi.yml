@@ -1,4 +1,195 @@
-      - name: Inspect PySide6 and qtpip
+name: Build Ilus APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git \
+            build-essential \
+            autoconf \
+            automake \
+            libtool \
+            pkg-config \
+            cmake \
+            ninja-build \
+            unzip \
+            zip
+
+      - name: Find Ilus interpreter
+        shell: bash
+        run: |
+          set -e
+
+          echo "=== Searching for main.py ==="
+
+          MAIN_PY=$(find . \
+            -type f \
+            -name "main.py" \
+            -not -path "./.git/*" \
+            | head -n 1)
+
+          if [ -z "$MAIN_PY" ]; then
+            echo "ERROR: main.py was not found."
+            exit 1
+          fi
+
+          echo "Found:"
+          echo "$MAIN_PY"
+
+          echo "MAIN_PY=$MAIN_PY" >> "$GITHUB_ENV"
+
+      - name: Find Ilus program
+        shell: bash
+        run: |
+          set -e
+
+          echo "=== Searching for .ilus files ==="
+
+          ILUS_COUNT=$(find . \
+            -type f \
+            -name "*.ilus" \
+            -not -path "./.git/*" \
+            | wc -l)
+
+          if [ "$ILUS_COUNT" -eq 0 ]; then
+            echo "ERROR: No .ilus file found."
+            exit 1
+          fi
+
+          if [ "$ILUS_COUNT" -gt 1 ]; then
+            echo "ERROR: More than one .ilus file found."
+            find . \
+              -type f \
+              -name "*.ilus" \
+              -not -path "./.git/*"
+            exit 1
+          fi
+
+          ILUS_FILE=$(find . \
+            -type f \
+            -name "*.ilus" \
+            -not -path "./.git/*" \
+            | head -n 1)
+
+          echo "Found:"
+          echo "$ILUS_FILE"
+
+          echo "ILUS_FILE=$ILUS_FILE" >> "$GITHUB_ENV"
+
+      - name: Prepare Ilus project
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf build_project
+          mkdir -p build_project
+
+          cp "$MAIN_PY" build_project/main.py
+          cp "$ILUS_FILE" build_project/
+
+          echo "=== Project ==="
+          find build_project -maxdepth 2 -type f -print
+
+      - name: Collect Ilus imports
+        shell: bash
+        run: |
+          set -e
+
+          echo "=== Reading imports ==="
+
+          while IFS= read -r line; do
+
+            if echo "$line" | grep -Eq '^[[:space:]]*import[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$'; then
+
+              MODULE=$(echo "$line" | sed -E 's/^[[:space:]]*import[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*$/\1/')
+
+              echo "Import found: $MODULE"
+
+              FOUND=""
+
+              if [ -f "$MODULE.py" ]; then
+                FOUND="$MODULE.py"
+              elif [ -f "$MODULE.ilus" ]; then
+                FOUND="$MODULE.ilus"
+              fi
+
+              if [ -z "$FOUND" ]; then
+                FOUND=$(find . \
+                  -type f \
+                  \( -name "$MODULE.py" -o -name "$MODULE.ilus" \) \
+                  -not -path "./.git/*" \
+                  | head -n 1)
+              fi
+
+              if [ -z "$FOUND" ]; then
+                echo "WARNING: Could not find library: $MODULE"
+              else
+                echo "Copying: $FOUND"
+                cp "$FOUND" build_project/
+              fi
+
+            fi
+
+          done < "$ILUS_FILE"
+
+          echo
+          echo "=== Final Ilus project ==="
+          find build_project -maxdepth 1 -type f -print
+
+      - name: Install PySide6
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "PySide6==6.8.2.1"
+          python -m pip install GitPython packaging
+
+      - name: Get PySide Android deployment tools
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf pyside-setup
+
+          git clone \
+            --depth 1 \
+            --branch 6.8 \
+            https://code.qt.io/pyside/pyside-setup.git
+
+          echo "=== Installing PySide setup requirements ==="
+
+          python -m pip install \
+            -r pyside-setup/requirements.txt
+
+          python -m pip install \
+            -r pyside-setup/tools/cross_compile_android/requirements.txt
+
+      - name: Download Android SDK and NDK
+        shell: bash
+        run: |
+          set -e
+
+          python \
+            pyside-setup/tools/cross_compile_android/main.py \
+            --download-only \
+            --skip-update \
+            --auto-accept-license
+
+      - name: Inspect PySide6 installation
         shell: bash
         run: |
           set -e
@@ -8,31 +199,104 @@
           which python
 
           echo
-          echo "=== PySide6 location ==="
-          python -m pip show PySide6 || true
+          echo "=== PySide6 ==="
+          python -m pip show PySide6
 
           echo
-          echo "=== Python bin ==="
-          find "$pythonLocation" \
-            -maxdepth 4 \
+          echo "=== Python scripts ==="
+          find "$(dirname "$(which python)")" \
+            -maxdepth 2 \
             -type f \
-            \( -iname "*qtpip*" -o -iname "*android*deploy*" \) \
+            | grep -Ei 'qtpip|pyside|shiboken' \
+            | head -n 100 || true
+
+          echo
+          echo "=== Entire Python installation: qtpip ==="
+          find "$pythonLocation" \
+            -type f \
+            \( -iname "*qtpip*" -o -iname "*qtpip*" \) \
             2>/dev/null \
+            | head -n 100 || true
+
+          echo
+          echo "=== PySide6 package files ==="
+          PYSIDE_PATH=$(python -c "import PySide6, os; print(os.path.dirname(PySide6.__file__))")
+
+          echo "$PYSIDE_PATH"
+
+          find "$PYSIDE_PATH" \
+            -maxdepth 3 \
+            -type f \
             | head -n 100
 
+      - name: Check Android deploy command
+        shell: bash
+        run: |
+          set -e
+
+          echo "=== pyside6-android-deploy ==="
+
+          which pyside6-android-deploy
+
+          pyside6-android-deploy --help
+
+      - name: Find Android wheels
+        shell: bash
+        run: |
+          set -e
+
+          echo "=== Searching for Android wheels ==="
+
+          find . \
+            -type f \
+            \( -name "*PySide6*android*.whl" \
+               -o -name "*shiboken6*android*.whl" \) \
+            -not -path "./.git/*" \
+            | head -n 100 || true
+
+      - name: Build APK
+        shell: bash
+        run: |
+          set -e
+
+          echo "=== Build project ==="
+          find build_project -maxdepth 1 -type f -print
+
           echo
-          echo "=== site-packages qtpip search ==="
-          python - <<'PY'
-          import sys
-          import os
+          echo "=== Running pyside6-android-deploy ==="
 
-          print("Python:", sys.executable)
+          cd build_project
 
-          for p in sys.path:
-              if os.path.isdir(p):
-                  print("SEARCH:", p)
-                  for root, dirs, files in os.walk(p):
-                      for f in files:
-                          if "qtpip" in f.lower():
-                              print("FOUND:", os.path.join(root, f))
-          PY
+          pyside6-android-deploy \
+            --name "Ilus" \
+            --force \
+            --verbose
+
+      - name: Find APK
+        shell: bash
+        run: |
+          set -e
+
+          echo "=== Searching for APK ==="
+
+          APK=$(find . .. \
+            -type f \
+            -name "*.apk" \
+            2>/dev/null \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          echo "APK found:"
+          echo "$APK"
+
+          cp "$APK" "$GITHUB_WORKSPACE/Ilus.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ilus-APK
+          path: Ilus.apk
