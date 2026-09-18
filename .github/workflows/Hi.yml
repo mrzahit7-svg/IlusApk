@@ -9,26 +9,22 @@ jobs:
 
     steps:
 
-      # 1. Repository-ni runner-ə gətir
       - name: Checkout repository
         uses: actions/checkout@v4
 
 
-      # 2. Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
 
-      # 3. Repository-də nə olduğunu göstər
       - name: Show repository
         run: |
           echo "=== Repository files ==="
           find . -maxdepth 3 -type f | sort
 
 
-      # 4. main.py-ni tap
       - name: Find main.py
         shell: bash
         run: |
@@ -37,15 +33,14 @@ jobs:
           MAIN=$(find . -type f -name "main.py" | head -n 1)
 
           if [ -z "$MAIN" ]; then
-            echo "ERROR: main.py was not found in repository!"
+            echo "ERROR: main.py was not found!"
             exit 1
           fi
 
-          echo "Found: $MAIN"
+          echo "Found main.py: $MAIN"
           echo "MAIN_PY=$MAIN" >> "$GITHUB_ENV"
 
 
-      # 5. .ilus proqramını tap
       - name: Find Ilus program
         shell: bash
         run: |
@@ -63,8 +58,6 @@ jobs:
           if [ "$COUNT" -gt 1 ]; then
             echo "ERROR: More than one .ilus file found:"
             echo "$FILES"
-            echo ""
-            echo "Keep only the main .ilus program."
             exit 1
           fi
 
@@ -74,8 +67,7 @@ jobs:
           echo "ILUS_FILE=$ILUS_FILE" >> "$GITHUB_ENV"
 
 
-      # 6. APK üçün ayrıca project qovluğu yarat
-      - name: Prepare project
+      - name: Prepare Ilus project
         shell: bash
         run: |
           set -e
@@ -87,10 +79,9 @@ jobs:
           cp "$ILUS_FILE" build_project/
 
           echo "=== Build project ==="
-          find build_project -maxdepth 2 -type f -print
+          find build_project -type f -print
 
 
-      # 7. Ilus importlarını tap və kitabxanaları əlavə et
       - name: Collect Ilus imports
         shell: python
         run: |
@@ -100,13 +91,12 @@ jobs:
 
           project = Path("build_project")
 
-          main_file = project / "${{ env.ILUS_FILE }}"
+          main_file = project / Path("${{ env.ILUS_FILE }}").name
 
-          # Əgər ILUS_FILE alt qovluqdadırsa,
-          # yalnız fayl adını götürürük.
-          main_file = project / Path(main_file).name
-
-          print("Reading:", main_file)
+          if not main_file.exists():
+              raise SystemExit(
+                  f"ERROR: Main Ilus file not found: {main_file}"
+              )
 
           text = main_file.read_text(encoding="utf-8")
 
@@ -117,7 +107,7 @@ jobs:
 
           imports = pattern.findall(text)
 
-          print("=== Imports ===")
+          print("=== Ilus imports ===")
 
           if not imports:
               print("No imports found.")
@@ -132,14 +122,14 @@ jobs:
                       py_file,
                       project / py_file.name
                   )
-                  print("Included:", py_file.name)
+                  print(f"Included: {py_file.name}")
 
               elif ilus_file.exists():
                   shutil.copy2(
                       ilus_file,
                       project / ilus_file.name
                   )
-                  print("Included:", ilus_file.name)
+                  print(f"Included: {ilus_file.name}")
 
               else:
                   raise SystemExit(
@@ -148,17 +138,10 @@ jobs:
                   )
 
 
-      # 8. PySide6
-      - name: Install PySide6
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install "PySide6==6.8.2.1"
-
-
-      # 9. Android deployment üçün lazımi alətlər
-      - name: Install build dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             git \
             wget \
@@ -167,10 +150,32 @@ jobs:
             build-essential
 
 
-      # 10. Android build mühitini hazırla
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+
+          python -m pip install \
+            "PySide6==6.8.2.1" \
+            GitPython
+
+
+      - name: Check PySide6 deployment tool
+        run: |
+          echo "=== PySide6 ==="
+          python -c "import PySide6; print(PySide6.__version__)"
+
+          echo "=== Deployment command ==="
+          which pyside6-android-deploy || true
+
+          pyside6-android-deploy --help
+
+
       - name: Prepare Android environment
         run: |
-          git clone --depth 1 \
+          set -e
+
+          git clone \
+            --depth 1 \
             --branch 6.8 \
             https://code.qt.io/pyside/pyside-setup.git
 
@@ -180,8 +185,7 @@ jobs:
             --auto-accept-license
 
 
-      # 11. Android PySide6 wheel-lərini götür
-      - name: Download Android wheels
+      - name: Download Android PySide6 wheels
         working-directory: build_project
         run: |
           set -e
@@ -193,12 +197,11 @@ jobs:
             --arch aarch64 \
             --dest wheels
 
-          echo "=== Wheels ==="
-          find wheels -type f -maxdepth 2 -print
+          echo "=== Android wheels ==="
+          find wheels -type f -print
 
 
-      # 12. Wheel-ləri tap
-      - name: Find wheels
+      - name: Find Android wheels
         working-directory: build_project
         shell: bash
         run: |
@@ -220,24 +223,25 @@ jobs:
           fi
 
           if [ -z "$SHIBOKEN_WHEEL" ]; then
-            echo "ERROR: shiboken6 Android wheel not found!"
+            echo "ERROR: Shiboken6 Android wheel not found!"
             exit 1
           fi
 
-          echo "PySide6:"
+          echo "PySide6 wheel:"
           echo "$PYSIDE_WHEEL"
 
-          echo "Shiboken6:"
+          echo "Shiboken6 wheel:"
           echo "$SHIBOKEN_WHEEL"
 
           echo "PYSIDE_WHEEL=$PWD/$PYSIDE_WHEEL" >> "$GITHUB_ENV"
           echo "SHIBOKEN_WHEEL=$PWD/$SHIBOKEN_WHEEL" >> "$GITHUB_ENV"
 
 
-      # 13. APK build
       - name: Build APK
         working-directory: build_project
         run: |
+          set -e
+
           pyside6-android-deploy \
             --name "Ilus" \
             --wheel-pyside="$PYSIDE_WHEEL" \
@@ -246,18 +250,17 @@ jobs:
             --force
 
 
-      # 14. APK-ni tap
       - name: Find APK
         shell: bash
         run: |
           echo "=== APK files ==="
+
           find build_project \
             -type f \
             -name "*.apk" \
             -print
 
 
-      # 15. APK-ni GitHub Actions-dan götürmək üçün artifact
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
