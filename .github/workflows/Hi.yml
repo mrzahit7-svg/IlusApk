@@ -7,67 +7,19 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
-    env:
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.3.13750724
-      ANDROID_NDK_ROOT: /usr/local/lib/android/sdk/ndk/27.3.13750724
-
     steps:
-
-      # --------------------------------------------------
-      # 1. Repository
-      # --------------------------------------------------
 
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --------------------------------------------------
-      # 2. Python
-      # --------------------------------------------------
-
-      - name: Setup Python 3.11
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # --------------------------------------------------
-      # 3. Check Android tools already installed on runner
-      # --------------------------------------------------
-
-      - name: Check Android environment
-        shell: bash
-        run: |
-          set -e
-
-          echo "=== Android SDK ==="
-          echo "$ANDROID_SDK_ROOT"
-
-          echo
-          echo "=== NDK ==="
-          echo "$ANDROID_NDK_ROOT"
-
-          echo
-          echo "=== SDK manager ==="
-          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --version
-
-          echo
-          echo "=== NDK directory ==="
-          test -d "$ANDROID_NDK_ROOT"
-          ls -la "$ANDROID_NDK_ROOT" | head
-
-          echo
-          echo "=== Disk ==="
-          df -h
-
-      # --------------------------------------------------
-      # 4. System dependencies
-      # --------------------------------------------------
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
-
           sudo apt-get install -y \
             git \
             build-essential \
@@ -78,17 +30,14 @@ jobs:
             cmake \
             ninja-build \
             unzip \
-            zip \
-            openjdk-17-jdk
+            zip
 
-      # --------------------------------------------------
-      # 5. Find Ilus interpreter
-      # --------------------------------------------------
-
-      - name: Find main.py
+      - name: Find Ilus interpreter
         shell: bash
         run: |
           set -e
+
+          echo "=== Searching for main.py ==="
 
           MAIN_PY=$(find . \
             -type f \
@@ -97,52 +46,52 @@ jobs:
             | head -n 1)
 
           if [ -z "$MAIN_PY" ]; then
-            echo "ERROR: main.py not found."
+            echo "ERROR: main.py was not found."
             exit 1
           fi
-
-          echo "MAIN_PY=$MAIN_PY" >> "$GITHUB_ENV"
 
           echo "Found main.py:"
           echo "$MAIN_PY"
 
-      # --------------------------------------------------
-      # 6. Find Ilus program
-      # --------------------------------------------------
+          echo "MAIN_PY=$MAIN_PY" >> "$GITHUB_ENV"
 
       - name: Find Ilus program
         shell: bash
         run: |
           set -e
 
-          mapfile -t FILES < <(
-            find . \
-              -type f \
-              -name "*.ilus" \
-              -not -path "./.git/*"
-          )
+          echo "=== Searching for .ilus files ==="
 
-          if [ "${#FILES[@]}" -eq 0 ]; then
+          ILUS_COUNT=$(find . \
+            -type f \
+            -name "*.ilus" \
+            -not -path "./.git/*" \
+            | wc -l)
+
+          if [ "$ILUS_COUNT" -eq 0 ]; then
             echo "ERROR: No .ilus file found."
             exit 1
           fi
 
-          if [ "${#FILES[@]}" -gt 1 ]; then
+          if [ "$ILUS_COUNT" -gt 1 ]; then
             echo "ERROR: More than one .ilus file found:"
-            printf '%s\n' "${FILES[@]}"
+            find . \
+              -type f \
+              -name "*.ilus" \
+              -not -path "./.git/*"
             exit 1
           fi
 
-          ILUS_FILE="${FILES[0]}"
-
-          echo "ILUS_FILE=$ILUS_FILE" >> "$GITHUB_ENV"
+          ILUS_FILE=$(find . \
+            -type f \
+            -name "*.ilus" \
+            -not -path "./.git/*" \
+            | head -n 1)
 
           echo "Found Ilus program:"
           echo "$ILUS_FILE"
 
-      # --------------------------------------------------
-      # 7. Prepare project
-      # --------------------------------------------------
+          echo "ILUS_FILE=$ILUS_FILE" >> "$GITHUB_ENV"
 
       - name: Prepare Ilus project
         shell: bash
@@ -158,16 +107,12 @@ jobs:
           echo "=== Initial project ==="
           find build_project -maxdepth 1 -type f -print
 
-      # --------------------------------------------------
-      # 8. Copy Ilus imports
-      # --------------------------------------------------
-
       - name: Collect Ilus imports
         shell: bash
         run: |
           set -e
 
-          echo "=== Imports ==="
+          echo "=== Reading Ilus imports ==="
 
           while IFS= read -r line; do
 
@@ -178,14 +123,16 @@ jobs:
               MODULE=$(echo "$line" | sed -E \
                 's/^[[:space:]]*import[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*$/\1/')
 
-              echo "Found import: $MODULE"
+              echo "Import found: $MODULE"
 
               FOUND=""
 
               if [ -f "$MODULE.py" ]; then
                 FOUND="$MODULE.py"
+
               elif [ -f "$MODULE.ilus" ]; then
                 FOUND="$MODULE.ilus"
+
               else
                 FOUND=$(find . \
                   -type f \
@@ -195,9 +142,11 @@ jobs:
               fi
 
               if [ -z "$FOUND" ]; then
-                echo "WARNING: Library '$MODULE' was not found."
+                echo "WARNING: Library not found: $MODULE"
               else
-                echo "Copying $FOUND"
+                echo "Copying library:"
+                echo "$FOUND"
+
                 cp "$FOUND" build_project/
               fi
 
@@ -207,11 +156,11 @@ jobs:
 
           echo
           echo "=== Final Ilus project ==="
-          find build_project -maxdepth 1 -type f -print
 
-      # --------------------------------------------------
-      # 9. Install desktop PySide6 deployment tool
-      # --------------------------------------------------
+          find build_project \
+            -maxdepth 1 \
+            -type f \
+            -print
 
       - name: Install PySide6
         shell: bash
@@ -227,146 +176,222 @@ jobs:
             GitPython \
             packaging
 
-      # --------------------------------------------------
-      # 10. Verify deploy tool
-      # --------------------------------------------------
-
-      - name: Verify Android deploy tool
+      - name: Get PySide Android deployment tools
         shell: bash
         run: |
           set -e
 
-          echo "=== pyside6-android-deploy ==="
+          rm -rf pyside-setup
 
-          command -v pyside6-android-deploy
+          git clone \
+            --depth 1 \
+            --branch 6.8 \
+            https://code.qt.io/pyside/pyside-setup.git
 
-          pyside6-android-deploy --help
+          echo "=== Installing PySide setup requirements ==="
 
-      # --------------------------------------------------
-      # 11. Download OFFICIAL prebuilt Android wheels
-      # --------------------------------------------------
+          python -m pip install \
+            -r pyside-setup/requirements.txt
 
-      - name: Download official Android wheels
+          python -m pip install \
+            -r pyside-setup/tools/cross_compile_android/requirements.txt
+
+      - name: Download Android SDK and NDK
         shell: bash
         run: |
           set -e
 
+          python \
+            pyside-setup/tools/cross_compile_android/main.py \
+            --download-only \
+            --skip-update \
+            --auto-accept-license
+
+      - name: Download Android PySide6 wheels
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf android_wheels
           mkdir -p android_wheels
 
-          PY_URL="https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.8.2.1-6.8.2-cp311-cp311-android_aarch64.whl"
+          echo "=== Looking for qtpip ==="
 
-          SHIBOKEN_URL="https://download.qt.io/official_releases/QtForPython/shiboken6/shiboken6-6.8.2.1-6.8.2-cp311-cp311-android_aarch64.whl"
+          QTPIP=$(find "$pythonLocation" \
+            -type f \
+            -name "qtpip" \
+            2>/dev/null \
+            | head -n 1)
 
-          echo "Downloading PySide6 Android wheel..."
-          curl -fL \
-            "$PY_URL" \
-            -o android_wheels/PySide6-android-aarch64.whl
+          if [ -n "$QTPIP" ]; then
 
-          echo "Downloading Shiboken6 Android wheel..."
-          curl -fL \
-            "$SHIBOKEN_URL" \
-            -o android_wheels/shiboken6-android-aarch64.whl
+            echo "qtpip executable found:"
+            echo "$QTPIP"
+
+            chmod +x "$QTPIP"
+
+            "$QTPIP" download \
+              PySide6 \
+              --android \
+              --arch aarch64 \
+              --dest android_wheels
+
+          else
+
+            echo "qtpip executable not found."
+
+            echo "Checking installed PySide6 tools..."
+
+            find "$pythonLocation" \
+              -type f \
+              \( \
+                -iname "*qtpip*" \
+                -o \
+                -iname "*android*deploy*" \
+              \) \
+              2>/dev/null \
+              | head -n 100
+
+            echo
+            echo "Trying PySide6 Android wheel download through pip..."
+
+            python -m pip download \
+              PySide6 \
+              --only-binary=:all: \
+              --dest android_wheels \
+              || true
+
+          fi
 
           echo
-          echo "=== Wheels ==="
-          ls -lh android_wheels
+          echo "=== Android wheels ==="
 
-      # --------------------------------------------------
-      # 12. Verify wheels
-      # --------------------------------------------------
+          find android_wheels \
+            -type f \
+            -name "*.whl" \
+            -print
 
       - name: Verify Android wheels
         shell: bash
         run: |
           set -e
 
-          test -s android_wheels/PySide6-android-aarch64.whl
-          test -s android_wheels/shiboken6-android-aarch64.whl
+          PYSIDE_WHEEL=$(find "$GITHUB_WORKSPACE/android_wheels" \
+            -type f \
+            -name "PySide6-android-aarch64.whl" \
+            | head -n 1)
 
-          echo "PySide6 wheel:"
-          unzip -l android_wheels/PySide6-android-aarch64.whl \
-            | head -n 20
+          SHIBOKEN_WHEEL=$(find "$GITHUB_WORKSPACE/android_wheels" \
+            -type f \
+            -name "shiboken6-android-aarch64.whl" \
+            | head -n 1)
+
+          if [ -z "$PYSIDE_WHEEL" ]; then
+            echo "ERROR: PySide6 Android wheel was not found."
+            exit 1
+          fi
+
+          if [ -z "$SHIBOKEN_WHEEL" ]; then
+            echo "ERROR: Shiboken6 Android wheel was not found."
+            exit 1
+          fi
+
+          echo "PySide6:"
+          echo "$PYSIDE_WHEEL"
 
           echo
-          echo "Shiboken6 wheel:"
-          unzip -l android_wheels/shiboken6-android-aarch64.whl \
-            | head -n 20
+          echo "Shiboken6:"
+          echo "$SHIBOKEN_WHEEL"
 
-      # --------------------------------------------------
-      # 13. Build APK
-      # --------------------------------------------------
+          echo "PYSIDE_WHEEL=$PYSIDE_WHEEL" >> "$GITHUB_ENV"
+          echo "SHIBOKEN_WHEEL=$SHIBOKEN_WHEEL" >> "$GITHUB_ENV"
 
-      - name: Build Ilus APK
+      - name: Check Android deploy tool
         shell: bash
-        working-directory: build_project
         run: |
           set -e
 
-          echo "=== Project ==="
-          ls -lah
+          echo "=== pyside6-android-deploy ==="
+
+          which pyside6-android-deploy
+
+          pyside6-android-deploy --help
+
+      - name: Build APK
+        shell: bash
+        run: |
+          set -e
+
+          echo "=== Build project ==="
+
+          find "$GITHUB_WORKSPACE/build_project" \
+            -maxdepth 1 \
+            -type f \
+            -print
 
           echo
-          echo "=== Android SDK ==="
-          echo "$ANDROID_SDK_ROOT"
+          echo "=== PySide6 Android wheel ==="
+          echo "$PYSIDE_WHEEL"
 
           echo
-          echo "=== Android NDK ==="
-          echo "$ANDROID_NDK_ROOT"
+          echo "=== Shiboken6 Android wheel ==="
+          echo "$SHIBOKEN_WHEEL"
 
           echo
-          echo "=== Starting deployment ==="
+          echo "=== Starting Android deployment ==="
+
+          cd "$GITHUB_WORKSPACE/build_project"
 
           pyside6-android-deploy \
             --name "Ilus" \
-            --wheel-pyside="$GITHUB_WORKSPACE/android_wheels/PySide6-android-aarch64.whl" \
-            --wheel-shiboken="$GITHUB_WORKSPACE/android_wheels/shiboken6-android-aarch64.whl" \
-            --ndk-path="$ANDROID_NDK_ROOT" \
-            --sdk-path="$ANDROID_SDK_ROOT" \
+            --wheel-pyside="$PYSIDE_WHEEL" \
+            --wheel-shiboken="$SHIBOKEN_WHEEL" \
             --force \
             --verbose
 
-      # --------------------------------------------------
-      # 14. Find APK
-      # --------------------------------------------------
-
-      - name: Find APK
+      - name: Search for APK
         shell: bash
         run: |
           set -e
 
-          echo "=== Searching for APK ==="
+          echo "=== Searching entire workspace for APK ==="
 
-          APK=$(find . \
+          find "$GITHUB_WORKSPACE" \
             -type f \
             -name "*.apk" \
-            -not -path "./.git/*" \
+            -print
+
+          APK=$(find "$GITHUB_WORKSPACE" \
+            -type f \
+            -name "*.apk" \
             | head -n 1)
 
           if [ -z "$APK" ]; then
+
+            echo
             echo "ERROR: APK was not generated."
 
             echo
-            echo "=== Files ==="
-            find . \
+            echo "=== Build project files ==="
+
+            find "$GITHUB_WORKSPACE/build_project" \
+              -maxdepth 6 \
               -type f \
-              -not -path "./.git/*" \
-              | tail -n 100
+              -print \
+              | head -n 500
 
             exit 1
           fi
 
+          echo
           echo "APK found:"
           echo "$APK"
 
-          cp "$APK" "$GITHUB_WORKSPACE/Ilus.apk"
+          cp "$APK" \
+            "$GITHUB_WORKSPACE/Ilus.apk"
 
-      # --------------------------------------------------
-      # 15. Upload APK
-      # --------------------------------------------------
-
-      - name: Upload Ilus APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Ilus-APK
           path: Ilus.apk
-          if-no-files-found: error
