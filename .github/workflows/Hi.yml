@@ -9,17 +9,17 @@ jobs:
 
     steps:
 
-      # --------------------------------------------------
+      # ==========================================
       # 1. Repository
-      # --------------------------------------------------
+      # ==========================================
 
       - name: Checkout repository
         uses: actions/checkout@v4
 
 
-      # --------------------------------------------------
+      # ==========================================
       # 2. Python
-      # --------------------------------------------------
+      # ==========================================
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -27,12 +27,14 @@ jobs:
           python-version: "3.11"
 
 
-      # --------------------------------------------------
+      # ==========================================
       # 3. System dependencies
-      # --------------------------------------------------
+      # ==========================================
 
       - name: Install system dependencies
         run: |
+          set -e
+
           sudo apt-get update
 
           sudo apt-get install -y \
@@ -43,9 +45,9 @@ jobs:
             build-essential
 
 
-      # --------------------------------------------------
+      # ==========================================
       # 4. Find main.py
-      # --------------------------------------------------
+      # ==========================================
 
       - name: Find main.py
         shell: bash
@@ -69,9 +71,9 @@ jobs:
           echo "MAIN_PY=$MAIN" >> "$GITHUB_ENV"
 
 
-      # --------------------------------------------------
-      # 5. Find the main Ilus program
-      # --------------------------------------------------
+      # ==========================================
+      # 5. Find main .ilus program
+      # ==========================================
 
       - name: Find Ilus program
         shell: bash
@@ -93,8 +95,6 @@ jobs:
           if [ "$COUNT" -gt 1 ]; then
             echo "ERROR: More than one .ilus file found:"
             echo "$FILES"
-            echo ""
-            echo "Please keep only one main .ilus program."
             exit 1
           fi
 
@@ -106,9 +106,9 @@ jobs:
           echo "ILUS_FILE=$ILUS_FILE" >> "$GITHUB_ENV"
 
 
-      # --------------------------------------------------
+      # ==========================================
       # 6. Prepare project
-      # --------------------------------------------------
+      # ==========================================
 
       - name: Prepare Ilus project
         shell: bash
@@ -124,12 +124,15 @@ jobs:
             "build_project/$(basename "$ILUS_FILE")"
 
           echo "=== Build project ==="
-          find build_project -maxdepth 2 -type f -print
+          find build_project \
+            -maxdepth 2 \
+            -type f \
+            -print
 
 
-      # --------------------------------------------------
+      # ==========================================
       # 7. Collect Ilus imports
-      # --------------------------------------------------
+      # ==========================================
 
       - name: Collect Ilus imports
         shell: python
@@ -149,7 +152,7 @@ jobs:
                   f"ERROR: Ilus program not found: {main_file}"
               )
 
-          print("Reading Ilus program:")
+          print("Reading:")
           print(main_file)
 
           text = main_file.read_text(
@@ -173,13 +176,8 @@ jobs:
 
           for name in imports:
 
-              py_file = Path(
-                  name + ".py"
-              )
-
-              ilus_file = Path(
-                  name + ".ilus"
-              )
+              py_file = Path(name + ".py")
+              ilus_file = Path(name + ".ilus")
 
               if py_file.exists():
 
@@ -189,8 +187,7 @@ jobs:
                   )
 
                   print(
-                      f"Included Python library: "
-                      f"{py_file.name}"
+                      f"Included: {py_file.name}"
                   )
 
               elif ilus_file.exists():
@@ -201,8 +198,7 @@ jobs:
                   )
 
                   print(
-                      f"Included Ilus library: "
-                      f"{ilus_file.name}"
+                      f"Included: {ilus_file.name}"
                   )
 
               else:
@@ -215,21 +211,23 @@ jobs:
                   )
 
 
-      # --------------------------------------------------
+      # ==========================================
       # 8. Install PySide6
-      # --------------------------------------------------
+      # ==========================================
 
       - name: Install PySide6
         run: |
+          set -e
+
           python -m pip install --upgrade pip
 
           python -m pip install \
             "PySide6==6.8.2.1"
 
 
-      # --------------------------------------------------
-      # 9. Clone Qt for Python 6.8
-      # --------------------------------------------------
+      # ==========================================
+      # 9. Clone PySide setup
+      # ==========================================
 
       - name: Clone PySide setup
         run: |
@@ -241,11 +239,11 @@ jobs:
             https://code.qt.io/pyside/pyside-setup.git
 
 
-      # --------------------------------------------------
-      # 10. Install Qt for Python requirements
-      # --------------------------------------------------
+      # ==========================================
+      # 10. Install Qt deployment requirements
+      # ==========================================
 
-      - name: Install Android deployment requirements
+      - name: Install Qt deployment requirements
         run: |
           set -e
 
@@ -256,42 +254,9 @@ jobs:
             -r pyside-setup/tools/cross_compile_android/requirements.txt
 
 
-      # --------------------------------------------------
-      # 11. Check deployment tool
-      # --------------------------------------------------
-
-      - name: Check deployment tools
-        run: |
-          set -e
-
-          echo "=== Python ==="
-          python --version
-
-          echo
-          echo "=== PySide6 ==="
-          python -c \
-            "import PySide6; print(PySide6.__version__)"
-
-          echo
-          echo "=== GitPython ==="
-          python -c \
-            "import git; print(git.__version__)"
-
-          echo
-          echo "=== packaging ==="
-          python -c \
-            "import packaging; print(packaging.__version__)"
-
-          echo
-          echo "=== pyside6-android-deploy ==="
-          which pyside6-android-deploy
-
-          pyside6-android-deploy --help
-
-
-      # --------------------------------------------------
-      # 12. Download Android SDK + NDK
-      # --------------------------------------------------
+      # ==========================================
+      # 11. Prepare Android SDK + NDK
+      # ==========================================
 
       - name: Download Android SDK and NDK
         run: |
@@ -304,9 +269,51 @@ jobs:
             --auto-accept-license
 
 
-      # --------------------------------------------------
-      # 13. Download official Android PySide6 wheels
-      # --------------------------------------------------
+      # ==========================================
+      # 12. Locate qtpip
+      # ==========================================
+
+      - name: Locate qtpip
+        shell: bash
+        run: |
+          set -e
+
+          echo "=== Searching for qtpip ==="
+
+          QTPIP=$(find \
+            /opt/hostedtoolcache/Python/3.11.16/x64 \
+            -type f \
+            -name "qtpip" \
+            2>/dev/null \
+            | head -n 1)
+
+          if [ -z "$QTPIP" ]; then
+            echo "ERROR: qtpip executable was not found."
+
+            echo
+            echo "=== PySide6 scripts ==="
+
+            find \
+              /opt/hostedtoolcache/Python/3.11.16/x64 \
+              -type f \
+              -iname "*qtpip*" \
+              2>/dev/null \
+              | head -n 20
+
+            exit 1
+          fi
+
+          echo "Found qtpip:"
+          echo "$QTPIP"
+
+          chmod +x "$QTPIP"
+
+          echo "QTPIP=$QTPIP" >> "$GITHUB_ENV"
+
+
+      # ==========================================
+      # 13. Download Android PySide6 wheels
+      # ==========================================
 
       - name: Download Android PySide6 wheels
         working-directory: build_project
@@ -315,23 +322,23 @@ jobs:
 
           mkdir -p wheels
 
-          qtpip download \
+          "$QTPIP" download \
             PySide6 \
             --android \
             --arch aarch64 \
             --dest wheels
 
           echo
-          echo "=== Downloaded Android wheels ==="
+          echo "=== Android wheels ==="
 
           find wheels \
             -type f \
             -print
 
 
-      # --------------------------------------------------
-      # 14. Find PySide6 + Shiboken Android wheels
-      # --------------------------------------------------
+      # ==========================================
+      # 14. Find Android wheels
+      # ==========================================
 
       - name: Find Android wheels
         working-directory: build_project
@@ -360,11 +367,11 @@ jobs:
           fi
 
           echo
-          echo "PySide6 Android wheel:"
+          echo "PySide6 wheel:"
           echo "$PYSIDE_WHEEL"
 
           echo
-          echo "Shiboken6 Android wheel:"
+          echo "Shiboken6 wheel:"
           echo "$SHIBOKEN_WHEEL"
 
           echo \
@@ -376,9 +383,9 @@ jobs:
             >> "$GITHUB_ENV"
 
 
-      # --------------------------------------------------
+      # ==========================================
       # 15. Build APK
-      # --------------------------------------------------
+      # ==========================================
 
       - name: Build APK
         working-directory: build_project
@@ -389,18 +396,18 @@ jobs:
             --name "Ilus" \
             --wheel-pyside="$PYSIDE_WHEEL" \
             --wheel-shiboken="$SHIBOKEN_WHEEL" \
-            --arch aarch64 \
-            --force
+            --force \
+            --verbose
 
 
-      # --------------------------------------------------
-      # 16. Find generated APK
-      # --------------------------------------------------
+      # ==========================================
+      # 16. Find APK
+      # ==========================================
 
       - name: Find APK
         shell: bash
         run: |
-          echo "=== Generated APK files ==="
+          echo "=== APK files ==="
 
           find build_project \
             -type f \
@@ -408,9 +415,9 @@ jobs:
             -print
 
 
-      # --------------------------------------------------
+      # ==========================================
       # 17. Upload APK
-      # --------------------------------------------------
+      # ==========================================
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
