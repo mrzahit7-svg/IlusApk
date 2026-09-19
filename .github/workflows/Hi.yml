@@ -6,11 +6,11 @@ on:
   workflow_dispatch:
     inputs:
       ilus_file:
-        description: "APK-ya çevriləcək .ilus faylı"
+        description: "APK-ya Ã§evrilÉ™cÉ™k .ilus faylÄ±"
         default: "math.ilus"
         required: true
       app_name:
-        description: "Tətbiqin adı"
+        description: "TÉ™tbiqin adÄ±"
         default: "IlusApp"
         required: true
 
@@ -24,7 +24,7 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - name: Repo-nu yüklə
+      - name: Repo-nu yÃ¼klÉ™
         uses: actions/checkout@v4
 
       - name: Python qur
@@ -38,24 +38,24 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Sistem paketlərini quraşdır
+      - name: Sistem paketlÉ™rini quraÅŸdÄ±r
         run: |
           sudo apt-get update
           sudo apt-get install -y git zip unzip autoconf automake libtool \
             pkg-config zlib1g-dev libncurses-dev cmake libffi-dev libssl-dev \
             libltdl-dev build-essential
 
-      - name: Buildozer quraşdır
+      - name: Buildozer quraÅŸdÄ±r
         run: |
           python -m pip install --upgrade pip
           pip install buildozer "cython<3.1" setuptools
 
-      - name: Ilus mühərrikini GUI-dən ayır
+      - name: Ilus mÃ¼hÉ™rrikini GUI-dÉ™n ayÄ±r
         run: |
-          # main.py = PySide6 IDE + dil mühərriki. Android-də PySide6 yoxdur,
-          # ona görə yalnız təmiz Python mühərrikini (IlusInterpreter) götürürük.
-          test -f main.py || { echo "main.py tapılmadı"; exit 1; }
-          test -f "$ILUS_FILE" || { echo "$ILUS_FILE tapılmadı"; exit 1; }
+          # main.py = PySide6 IDE + dil mÃ¼hÉ™rriki. Android-dÉ™ PySide6 yoxdur,
+          # ona gÃ¶rÉ™ yalnÄ±z tÉ™miz Python mÃ¼hÉ™rrikini (IlusInterpreter) gÃ¶tÃ¼rÃ¼rÃ¼k.
+          test -f main.py || { echo "main.py tapÄ±lmadÄ±"; exit 1; }
+          test -f "$ILUS_FILE" || { echo "$ILUS_FILE tapÄ±lmadÄ±"; exit 1; }
           mkdir -p build_apk
           python - <<'PYEOF'
           src = open("main.py", encoding="utf-8").read()
@@ -63,14 +63,14 @@ jobs:
           m = src.index(marker)
           cut = src.rfind("# ====", 0, m)
           engine = src[:cut]
-          assert "class IlusInterpreter" in engine, "IlusInterpreter tapılmadı"
+          assert "class IlusInterpreter" in engine, "IlusInterpreter tapÄ±lmadÄ±"
           open("build_apk/ilus_engine.py", "w", encoding="utf-8").write(engine)
-          print("Mühərrik sətirləri:", len(engine.splitlines()))
+          print("MÃ¼hÉ™rrik sÉ™tirlÉ™ri:", len(engine.splitlines()))
           PYEOF
           python -m py_compile build_apk/ilus_engine.py
           cp "$ILUS_FILE" build_apk/program.ilus
 
-      - name: Android tətbiq faylını (Kivy) yarat
+      - name: Android tÉ™tbiq faylÄ±nÄ± (Kivy) yarat
         run: |
           cat > build_apk/main.py <<'PYEOF'
           import os
@@ -134,7 +134,7 @@ jobs:
                       if result and str(result) not in "\n".join(self.interp.logs):
                           self.interp.logs.append(str(result))
                   except Exception as e:
-                      self.interp.logs.append("Xəta: %s" % e)
+                      self.interp.logs.append("XÉ™ta: %s" % e)
 
               def _poll(self, dt):
                   logs = list(self.interp.logs)
@@ -147,7 +147,7 @@ jobs:
                       self._last_count = len(logs)
                       Clock.schedule_once(lambda d: setattr(self.scroll, "scroll_y", 0), 0.05)
 
-              # Ilus-un input/free() sorğusu interpreter thread-indən gəlir
+              # Ilus-un input/free() sorÄŸusu interpreter thread-indÉ™n gÉ™lir
               def _request_input(self, prompt):
                   self._input_event = threading.Event()
                   self._input_value = ""
@@ -199,7 +199,7 @@ jobs:
           EOF
           cat build_apk/buildozer.spec
 
-      - name: Buildozer keşi
+      - name: Buildozer keÅŸi
         uses: actions/cache@v4
         with:
           path: |
@@ -208,11 +208,45 @@ jobs:
           key: buildozer-${{ runner.os }}-${{ hashFiles('.github/workflows/build-apk.yml') }}
           restore-keys: buildozer-${{ runner.os }}-
 
-      - name: APK-nı build et
+      - name: APK-nÄ± build et
         working-directory: build_apk
-        run: buildozer -v android debug
+        run: |
+          set +e
+          buildozer -v android debug > ../build.log 2>&1 &
+          BPID=$!
+          # log Ã§ox bÃ¶yÃ¼kdÃ¼r, ekrana yalnÄ±z canlÄ± olduÄŸunu gÃ¶stÉ™rÉ™n nÃ¶qtÉ™lÉ™r yazÄ±rÄ±q
+          while kill -0 $BPID 2>/dev/null; do
+            echo "build gedir... $(wc -l < ../build.log) sÉ™tir log"
+            sleep 60
+          done
+          wait $BPID
+          STATUS=$?
+          if [ $STATUS -ne 0 ]; then
+            {
+              echo "## âŒ Build xÉ™tasÄ±"
+              echo "### Son 60 sÉ™tir"
+              echo '```'
+              tail -n 60 ../build.log
+              echo '```'
+              echo "### XÉ™ta sÉ™tirlÉ™ri"
+              echo '```'
+              grep -n -i -E "error|failed|exception|no such file|not found" ../build.log | tail -n 30
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Build uÄŸursuz oldu. Run sÉ™hifÉ™sinin yuxarÄ±sÄ±ndakÄ± Summary-yÉ™ bax."
+            tail -n 60 ../build.log
+          fi
+          exit $STATUS
 
-      - name: APK-nı yüklə (Artifact)
+      - name: Tam log-u yÃ¼klÉ™
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
+
+      - name: APK-nÄ± yÃ¼klÉ™ (Artifact)
         uses: actions/upload-artifact@v4
         with:
           name: ilus-apk
