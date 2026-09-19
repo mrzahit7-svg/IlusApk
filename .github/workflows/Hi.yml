@@ -1,403 +1,220 @@
 name: Build Ilus APK
 
 on:
+  push:
+    branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      ilus_file:
+        description: "APK-ya çevriləcək .ilus faylı"
+        default: "math.ilus"
+        required: true
+      app_name:
+        description: "Tətbiqin adı"
+        default: "IlusApp"
+        required: true
+
+env:
+  ILUS_FILE: ${{ github.event.inputs.ilus_file || 'math.ilus' }}
+  APP_NAME: ${{ github.event.inputs.app_name || 'IlusApp' }}
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
-
-      # =========================================================
-      # 1. GitHub repository-ni götür
-      # =========================================================
-      - name: Checkout repository
+      - name: Repo-nu yüklə
         uses: actions/checkout@v4
 
-
-      # =========================================================
-      # 2. Python
-      # =========================================================
-      - name: Setup Python
+      - name: Python qur
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-
-      # =========================================================
-      # 3. Java
-      # =========================================================
-      - name: Setup Java
+      - name: Java 17 qur
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-
-      # =========================================================
-      # 4. Python paketləri
-      # =========================================================
-      - name: Install build tools
+      - name: Sistem paketlərini quraşdır
         run: |
-          python -m pip install --upgrade pip setuptools wheel
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip autoconf automake libtool \
+            pkg-config zlib1g-dev libncurses-dev cmake libffi-dev libssl-dev \
+            libltdl-dev build-essential
 
-          python -m pip install \
-            "PySide6==6.8.2.1"
-
-
-      # =========================================================
-      # 5. Repo-dakı ilk .ilus faylını tap
-      # =========================================================
-      - name: Find first Ilus file
-        shell: bash
+      - name: Buildozer quraşdır
         run: |
-          set -e
+          python -m pip install --upgrade pip
+          pip install buildozer "cython<3.1" setuptools
 
-          echo "Searching repository for .ilus files..."
-
-          ILUS_FILE=$(find . \
-            -type f \
-            -name "*.ilus" \
-            ! -path "./.git/*" \
-            | sort \
-            | head -n 1)
-
-          if [ -z "$ILUS_FILE" ]; then
-            echo "::error::No .ilus file was found in the repository."
-            exit 1
-          fi
-
-          ILUS_FILE="${ILUS_FILE#./}"
-          ILUS_NAME="$(basename "$ILUS_FILE")"
-          ILUS_DIR="$(dirname "$ILUS_FILE")"
-
-          echo
-          echo "========================================"
-          echo "Ilus source:"
-          echo "$ILUS_FILE"
-          echo "Ilus name:"
-          echo "$ILUS_NAME"
-          echo "========================================"
-          echo
-
-          echo "ILUS_FILE=$ILUS_FILE" >> "$GITHUB_ENV"
-          echo "ILUS_NAME=$ILUS_NAME" >> "$GITHUB_ENV"
-          echo "ILUS_DIR=$ILUS_DIR" >> "$GITHUB_ENV"
-
-
-      # =========================================================
-      # 6. Repository-ni yoxla
-      # =========================================================
-      - name: Show project
-        shell: bash
+      - name: Ilus mühərrikini GUI-dən ayır
         run: |
-          set -e
+          # main.py = PySide6 IDE + dil mühərriki. Android-də PySide6 yoxdur,
+          # ona görə yalnız təmiz Python mühərrikini (IlusInterpreter) götürürük.
+          test -f main.py || { echo "main.py tapılmadı"; exit 1; }
+          test -f "$ILUS_FILE" || { echo "$ILUS_FILE tapılmadı"; exit 1; }
+          mkdir -p build_apk
+          python - <<'PYEOF'
+          src = open("main.py", encoding="utf-8").read()
+          marker = "# Ilus IDE - PySide6 GUI shell"
+          m = src.index(marker)
+          cut = src.rfind("# ====", 0, m)
+          engine = src[:cut]
+          assert "class IlusInterpreter" in engine, "IlusInterpreter tapılmadı"
+          open("build_apk/ilus_engine.py", "w", encoding="utf-8").write(engine)
+          print("Mühərrik sətirləri:", len(engine.splitlines()))
+          PYEOF
+          python -m py_compile build_apk/ilus_engine.py
+          cp "$ILUS_FILE" build_apk/program.ilus
 
-          echo "=== Repository ==="
-          find . \
-            -type f \
-            ! -path "./.git/*" \
-            | sort
-
-          echo
-          echo "=== Selected Ilus file ==="
-          echo "$ILUS_FILE"
-
-          echo
-          echo "=== Ilus source ==="
-          cat "$ILUS_FILE"
-
-
-      # =========================================================
-      # 7. Build project yarat
-      # =========================================================
-      - name: Prepare Ilus build project
-        shell: bash
+      - name: Android tətbiq faylını (Kivy) yarat
         run: |
-          set -e
+          cat > build_apk/main.py <<'PYEOF'
+          import os
+          import threading
 
-          rm -rf build_project
-          mkdir -p build_project
+          from kivy.app import App
+          from kivy.clock import Clock
+          from kivy.uix.boxlayout import BoxLayout
+          from kivy.uix.label import Label
+          from kivy.uix.scrollview import ScrollView
+          from kivy.uix.textinput import TextInput
 
-          # Bütün repository-ni build project-ə köçür.
-          #
-          # Beləliklə:
-          #
-          #   main.py
-          #   *.ilus
-          #   *.py
-          #   Ilus kitabxanaları
-          #
-          # hamısı interpreter üçün əlçatan qalır.
-          cp -r . build_project
-
-          rm -rf build_project/.git
-          rm -rf build_project/.github
-          rm -rf build_project/.buildozer
-          rm -rf build_project/dist
-
-          echo
-          echo "=== Build project ==="
-          find build_project \
-            -maxdepth 5 \
-            -type f \
-            | sort
+          HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-      # =========================================================
-      # 8. Ilus import-larını tap
-      #
-      # Məsələn:
-      #
-      # import math
-      #
-      # → math.ilus / math.py / math/__init__.ilus
-      #
-      # internetdən heç nə götürülmür.
-      # =========================================================
-      - name: Resolve Ilus imports
-        working-directory: build_project
-        shell: bash
+          class IlusApp(App):
+              def build(self):
+                  self.title = "Ilus"
+                  root = BoxLayout(orientation="vertical", padding=6, spacing=6)
+
+                  self.scroll = ScrollView()
+                  self.out = Label(
+                      text="", size_hint_y=None, halign="left", valign="top",
+                      markup=False,
+                  )
+                  self.out.bind(
+                      width=lambda *a: setattr(self.out, "text_size", (self.out.width, None)),
+                      texture_size=lambda *a: setattr(self.out, "height", self.out.texture_size[1]),
+                  )
+                  self.scroll.add_widget(self.out)
+                  root.add_widget(self.scroll)
+
+                  self.input = TextInput(
+                      multiline=False, size_hint_y=None, height=110,
+                      disabled=True, hint_text="",
+                  )
+                  self.input.bind(on_text_validate=self._on_submit)
+                  root.add_widget(self.input)
+
+                  self._input_event = threading.Event()
+                  self._input_value = ""
+                  self._last_count = 0
+                  self.interp = None
+                  return root
+
+              def on_start(self):
+                  try:
+                      os.chdir(self.user_data_dir)
+                  except Exception:
+                      pass
+                  from ilus_engine import IlusInterpreter
+                  with open(os.path.join(HERE, "program.ilus"), encoding="utf-8") as f:
+                      code = f.read()
+                  self.interp = IlusInterpreter(request_input_callback=self._request_input)
+                  threading.Thread(target=self._run, args=(code,), daemon=True).start()
+                  Clock.schedule_interval(self._poll, 0.1)
+
+              def _run(self, code):
+                  try:
+                      result = self.interp.run(code)
+                      if result and str(result) not in "\n".join(self.interp.logs):
+                          self.interp.logs.append(str(result))
+                  except Exception as e:
+                      self.interp.logs.append("Xəta: %s" % e)
+
+              def _poll(self, dt):
+                  logs = list(self.interp.logs)
+                  if len(logs) < self._last_count:
+                      self.out.text = ""
+                      self._last_count = 0
+                  new = logs[self._last_count:]
+                  if new:
+                      self.out.text += ("\n" if self.out.text else "") + "\n".join(new)
+                      self._last_count = len(logs)
+                      Clock.schedule_once(lambda d: setattr(self.scroll, "scroll_y", 0), 0.05)
+
+              # Ilus-un input/free() sorğusu interpreter thread-indən gəlir
+              def _request_input(self, prompt):
+                  self._input_event = threading.Event()
+                  self._input_value = ""
+                  Clock.schedule_once(lambda dt: self._enable_input(prompt))
+                  self._input_event.wait()
+                  return self._input_value
+
+              def _enable_input(self, prompt):
+                  self.input.hint_text = str(prompt or "")
+                  self.input.text = ""
+                  self.input.disabled = False
+                  self.input.focus = True
+
+              def _on_submit(self, instance):
+                  self._input_value = instance.text
+                  instance.disabled = True
+                  instance.text = ""
+                  self._input_event.set()
+
+
+          if __name__ == "__main__":
+              IlusApp().run()
+          PYEOF
+
+      - name: buildozer.spec yarat
         run: |
-          set -e
+          PKG=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')
+          [ -z "$PKG" ] && PKG="ilusapp"
+          cat > build_apk/buildozer.spec <<EOF
+          [app]
+          title = ${APP_NAME}
+          package.name = ${PKG}
+          package.domain = org.ilus
+          source.dir = .
+          source.include_exts = py,ilus
+          version = 1.0
+          requirements = python3,kivy==2.3.0
+          orientation = portrait
+          fullscreen = 0
+          android.archs = arm64-v8a
+          android.api = 33
+          android.minapi = 21
+          android.permissions = INTERNET
+          android.accept_sdk_license = True
 
-          echo "========================================"
-          echo "Resolving Ilus imports"
-          echo "Source: $ILUS_NAME"
-          echo "========================================"
+          [buildozer]
+          log_level = 2
+          warn_on_root = 0
+          EOF
+          cat build_apk/buildozer.spec
 
-          IMPORT_FILE=".ilus_imports"
+      - name: Buildozer keşi
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            build_apk/.buildozer
+          key: buildozer-${{ runner.os }}-${{ hashFiles('.github/workflows/build-apk.yml') }}
+          restore-keys: buildozer-${{ runner.os }}-
 
-          : > "$IMPORT_FILE"
+      - name: APK-nı build et
+        working-directory: build_apk
+        run: buildozer -v android debug
 
-          grep -E \
-            '^[[:space:]]*import[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' \
-            "$ILUS_FILE" \
-            2>/dev/null \
-            | sed -E \
-              's/^[[:space:]]*import[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\1/' \
-            >> "$IMPORT_FILE" || true
-
-          grep -E \
-            '^[[:space:]]*from[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+import' \
-            "$ILUS_FILE" \
-            2>/dev/null \
-            | sed -E \
-              's/^[[:space:]]*from[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\1/' \
-            >> "$IMPORT_FILE" || true
-
-          sort -u "$IMPORT_FILE" -o "$IMPORT_FILE"
-
-          echo
-          echo "Detected imports:"
-
-          if [ -s "$IMPORT_FILE" ]; then
-            cat "$IMPORT_FILE"
-          else
-            echo "No imports found."
-          fi
-
-          echo
-
-          # -----------------------------------------------------
-          # Hər import-u repository daxilində axtar
-          # -----------------------------------------------------
-
-          while IFS= read -r LIB; do
-
-            [ -z "$LIB" ] && continue
-
-            echo "Checking library: $LIB"
-
-            FOUND=""
-
-            # LIB.ilus
-            FOUND=$(find . \
-              -type f \
-              -name "${LIB}.ilus" \
-              ! -path "./.git/*" \
-              | head -n 1 || true)
-
-            # LIB.py
-            if [ -z "$FOUND" ]; then
-              FOUND=$(find . \
-                -type f \
-                -name "${LIB}.py" \
-                ! -path "./.git/*" \
-                | head -n 1 || true)
-            fi
-
-            # LIB/__init__.ilus
-            if [ -z "$FOUND" ]; then
-              FOUND=$(find . \
-                -type f \
-                -path "*/${LIB}/__init__.ilus" \
-                ! -path "./.git/*" \
-                | head -n 1 || true)
-            fi
-
-            # LIB/__init__.py
-            if [ -z "$FOUND" ]; then
-              FOUND=$(find . \
-                -type f \
-                -path "*/${LIB}/__init__.py" \
-                ! -path "./.git/*" \
-                | head -n 1 || true)
-            fi
-
-            if [ -z "$FOUND" ]; then
-              echo
-              echo "::error::Ilus library '$LIB' was not found in the repository."
-              echo
-              echo "The following files were searched:"
-              echo "  ${LIB}.ilus"
-              echo "  ${LIB}.py"
-              echo "  ${LIB}/__init__.ilus"
-              echo "  ${LIB}/__init__.py"
-              exit 1
-            fi
-
-            echo "  FOUND: $FOUND"
-
-          done < "$IMPORT_FILE"
-
-          rm -f "$IMPORT_FILE"
-
-          echo
-          echo "All Ilus imports resolved."
-
-
-      # =========================================================
-      # 9. Əgər əsas .ilus faylı subdirectory-dədirsə,
-      #    onu build root-a gətir
-      #
-      # APK runtime üçün əsas proqramı:
-      #
-      #     main.ilus
-      #
-      # kimi saxlayırıq.
-      # =========================================================
-      - name: Prepare Ilus entry file
-        working-directory: build_project
-        shell: bash
-        run: |
-          set -e
-
-          cp "$ILUS_FILE" main.ilus
-
-          echo "Runtime Ilus entry:"
-          echo "main.ilus"
-
-          echo
-          echo "=== main.ilus ==="
-          cat main.ilus
-
-
-      # =========================================================
-      # 10. main.py yoxlanışı
-      #
-      # Bu sənin Ilus interpreter-indir.
-      # =========================================================
-      - name: Check Ilus interpreter
-        working-directory: build_project
-        shell: bash
-        run: |
-          set -e
-
-          if [ ! -f "main.py" ]; then
-            echo "::error::Ilus interpreter main.py was not found."
-            exit 1
-          fi
-
-          echo "Ilus interpreter found:"
-          ls -lh main.py
-
-
-      # =========================================================
-      # 11. PySide6 Android deployment spec yarat
-      # =========================================================
-      - name: Create deployment spec
-        working-directory: build_project
-        shell: bash
-        run: |
-          set -e
-
-          cat > pysidedeploy.spec <<EOF
-[app]
-title = Ilus
-input_file = main.py
-output_dir = deployment
-android_deployment_target = 34
-EOF
-
-          echo "=== pysidedeploy.spec ==="
-          cat pysidedeploy.spec
-
-
-      # =========================================================
-      # 12. PySide6 Android deployment
-      #
-      # Qt-nin öz deployment tool-u istifadə olunur.
-      # =========================================================
-      - name: Build Android application
-        working-directory: build_project
-        shell: bash
-        run: |
-          set -e
-
-          echo "Starting PySide6 Android deployment..."
-
-          pyside6-android-deploy \
-            --name Ilus \
-            --input main.py
-
-
-      # =========================================================
-      # 13. APK-ni tap
-      # =========================================================
-      - name: Find APK
-        working-directory: build_project
-        shell: bash
-        run: |
-          set -e
-
-          echo
-          echo "========================================"
-          echo "Searching for generated APK"
-          echo "========================================"
-
-          find . \
-            -type f \
-            -name "*.apk" \
-            -print
-
-          APK=$(find . \
-            -type f \
-            -name "*.apk" \
-            | head -n 1 || true)
-
-          if [ -z "$APK" ]; then
-            echo
-            echo "::error::APK was not generated."
-            exit 1
-          fi
-
-          echo
-          echo "APK:"
-          echo "$APK"
-
-          mkdir -p ../artifacts
-
-          cp "$APK" ../artifacts/Ilus.apk
-
-
-      # =========================================================
-      # 14. APK-ni GitHub Actions artifact kimi saxla
-      # =========================================================
-      - name: Upload APK
+      - name: APK-nı yüklə (Artifact)
         uses: actions/upload-artifact@v4
         with:
-          name: Ilus-APK
-          path: artifacts/Ilus.apk
+          name: ilus-apk
+          path: build_apk/bin/*.apk
           if-no-files-found: error
