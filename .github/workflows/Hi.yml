@@ -2,93 +2,134 @@ name: Build Ilus APK
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
-  build-apk:
+  build:
     runs-on: ubuntu-22.04
 
     steps:
-      # ---------------------------------------------------------
-      # 1. Repository
-      # ---------------------------------------------------------
+
+      # =========================================================
+      # 1. GitHub repository-ni götür
+      # =========================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ---------------------------------------------------------
+
+      # =========================================================
       # 2. Python
-      # PySide6 6.8.2.1 + qtpip + deployment tool
-      # ---------------------------------------------------------
-      - name: Set up Python
+      # =========================================================
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # ---------------------------------------------------------
+
+      # =========================================================
       # 3. Java
-      # ---------------------------------------------------------
-      - name: Set up Java
+      # =========================================================
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      # ---------------------------------------------------------
-      # 4. Install PySide6
-      # ---------------------------------------------------------
-      - name: Install PySide6
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install "PySide6==6.8.2.1"
 
-      # ---------------------------------------------------------
-      # 5. Check our two Ilus files
-      # ---------------------------------------------------------
-      - name: Check Ilus project
+      # =========================================================
+      # 4. Python paketləri
+      # =========================================================
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+
+          python -m pip install \
+            "PySide6==6.8.2.1"
+
+
+      # =========================================================
+      # 5. Repo-dakı ilk .ilus faylını tap
+      # =========================================================
+      - name: Find first Ilus file
         shell: bash
         run: |
           set -e
 
-          echo "=== Project files ==="
-          find . -maxdepth 3 -type f | sort
+          echo "Searching repository for .ilus files..."
 
-          test -f main.py || {
-            echo "::error::main.py not found"
-            exit 1
-          }
+          ILUS_FILE=$(find . \
+            -type f \
+            -name "*.ilus" \
+            ! -path "./.git/*" \
+            | sort \
+            | head -n 1)
 
-          test -f test.ilus || {
-            echo "::error::math.ilus not found"
+          if [ -z "$ILUS_FILE" ]; then
+            echo "::error::No .ilus file was found in the repository."
             exit 1
-          }
+          fi
+
+          ILUS_FILE="${ILUS_FILE#./}"
+          ILUS_NAME="$(basename "$ILUS_FILE")"
+          ILUS_DIR="$(dirname "$ILUS_FILE")"
 
           echo
-          echo "=== main.py ==="
-          head -n 20 main.py
-
+          echo "========================================"
+          echo "Ilus source:"
+          echo "$ILUS_FILE"
+          echo "Ilus name:"
+          echo "$ILUS_NAME"
+          echo "========================================"
           echo
-          echo "=== test.ilus ==="
-          cat test.ilus
 
-      # ---------------------------------------------------------
-      # 6. Find Ilus imports inside .ilus files
-      #
-      # IMPORTANT:
-      # We do NOT download Ilus libraries from the internet.
-      # Libraries must exist inside this GitHub repository.
-      # ---------------------------------------------------------
-      - name: Resolve Ilus libraries
+          echo "ILUS_FILE=$ILUS_FILE" >> "$GITHUB_ENV"
+          echo "ILUS_NAME=$ILUS_NAME" >> "$GITHUB_ENV"
+          echo "ILUS_DIR=$ILUS_DIR" >> "$GITHUB_ENV"
+
+
+      # =========================================================
+      # 6. Repository-ni yoxla
+      # =========================================================
+      - name: Show project
         shell: bash
         run: |
           set -e
 
+          echo "=== Repository ==="
+          find . \
+            -type f \
+            ! -path "./.git/*" \
+            | sort
+
+          echo
+          echo "=== Selected Ilus file ==="
+          echo "$ILUS_FILE"
+
+          echo
+          echo "=== Ilus source ==="
+          cat "$ILUS_FILE"
+
+
+      # =========================================================
+      # 7. Build project yarat
+      # =========================================================
+      - name: Prepare Ilus build project
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf build_project
           mkdir -p build_project
 
-          # Copy the complete project into the staging directory.
-          # This means .ilus and .py libraries from the repository
-          # remain available to the Ilus interpreter at runtime.
+          # Bütün repository-ni build project-ə köçür.
+          #
+          # Beləliklə:
+          #
+          #   main.py
+          #   *.ilus
+          #   *.py
+          #   Ilus kitabxanaları
+          #
+          # hamısı interpreter üçün əlçatan qalır.
           cp -r . build_project
 
           rm -rf build_project/.git
@@ -96,281 +137,239 @@ jobs:
           rm -rf build_project/.buildozer
           rm -rf build_project/dist
 
-          echo "=== Searching Ilus imports ==="
+          echo
+          echo "=== Build project ==="
+          find build_project \
+            -maxdepth 5 \
+            -type f \
+            | sort
 
-          IMPORTS_FILE="build_project/.ilus_imports"
-          : > "$IMPORTS_FILE"
 
-          find build_project -type f -name "*.ilus" \
-            ! -name ".ilus_imports" \
-            -print0 |
-          while IFS= read -r -d '' file; do
-            echo "Scanning: $file"
+      # =========================================================
+      # 8. Ilus import-larını tap
+      #
+      # Məsələn:
+      #
+      # import math
+      #
+      # → math.ilus / math.py / math/__init__.ilus
+      #
+      # internetdən heç nə götürülmür.
+      # =========================================================
+      - name: Resolve Ilus imports
+        working-directory: build_project
+        shell: bash
+        run: |
+          set -e
 
-            grep -E '^[[:space:]]*import[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' "$file" \
-              | sed -E 's/^[[:space:]]*import[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\1/' \
-              >> "$IMPORTS_FILE" || true
+          echo "========================================"
+          echo "Resolving Ilus imports"
+          echo "Source: $ILUS_NAME"
+          echo "========================================"
 
-            grep -E '^[[:space:]]*from[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+import' "$file" \
-              | sed -E 's/^[[:space:]]*from[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\1/' \
-              >> "$IMPORTS_FILE" || true
-          done
+          IMPORT_FILE=".ilus_imports"
 
-          sort -u "$IMPORTS_FILE" -o "$IMPORTS_FILE"
+          : > "$IMPORT_FILE"
+
+          grep -E \
+            '^[[:space:]]*import[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' \
+            "$ILUS_FILE" \
+            2>/dev/null \
+            | sed -E \
+              's/^[[:space:]]*import[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\1/' \
+            >> "$IMPORT_FILE" || true
+
+          grep -E \
+            '^[[:space:]]*from[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+import' \
+            "$ILUS_FILE" \
+            2>/dev/null \
+            | sed -E \
+              's/^[[:space:]]*from[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\1/' \
+            >> "$IMPORT_FILE" || true
+
+          sort -u "$IMPORT_FILE" -o "$IMPORT_FILE"
 
           echo
-          echo "=== Ilus dependencies ==="
+          echo "Detected imports:"
 
-          if [ -s "$IMPORTS_FILE" ]; then
-            cat "$IMPORTS_FILE"
+          if [ -s "$IMPORT_FILE" ]; then
+            cat "$IMPORT_FILE"
           else
-            echo "No Ilus imports found."
+            echo "No imports found."
           fi
 
+          echo
+
           # -----------------------------------------------------
-          # Resolve every imported library ONLY inside repository
+          # Hər import-u repository daxilində axtar
           # -----------------------------------------------------
 
-          while IFS= read -r lib; do
-            [ -z "$lib" ] && continue
+          while IFS= read -r LIB; do
 
-            echo
-            echo "Resolving Ilus library: $lib"
+            [ -z "$LIB" ] && continue
 
-            found=""
+            echo "Checking library: $LIB"
 
-            # NAME.ilus
-            candidate=$(find build_project \
+            FOUND=""
+
+            # LIB.ilus
+            FOUND=$(find . \
               -type f \
-              -name "${lib}.ilus" \
-              ! -path "*/.git/*" \
+              -name "${LIB}.ilus" \
+              ! -path "./.git/*" \
               | head -n 1 || true)
 
-            if [ -n "$candidate" ]; then
-              found="$candidate"
-            fi
-
-            # NAME.py
-            if [ -z "$found" ]; then
-              candidate=$(find build_project \
+            # LIB.py
+            if [ -z "$FOUND" ]; then
+              FOUND=$(find . \
                 -type f \
-                -name "${lib}.py" \
-                ! -path "*/.git/*" \
+                -name "${LIB}.py" \
+                ! -path "./.git/*" \
                 | head -n 1 || true)
-
-              if [ -n "$candidate" ]; then
-                found="$candidate"
-              fi
             fi
 
-            # NAME/__init__.ilus
-            if [ -z "$found" ]; then
-              candidate=$(find build_project \
+            # LIB/__init__.ilus
+            if [ -z "$FOUND" ]; then
+              FOUND=$(find . \
                 -type f \
-                -path "*/${lib}/__init__.ilus" \
-                ! -path "*/.git/*" \
+                -path "*/${LIB}/__init__.ilus" \
+                ! -path "./.git/*" \
                 | head -n 1 || true)
-
-              if [ -n "$candidate" ]; then
-                found="$candidate"
-              fi
             fi
 
-            # NAME/__init__.py
-            if [ -z "$found" ]; then
-              candidate=$(find build_project \
+            # LIB/__init__.py
+            if [ -z "$FOUND" ]; then
+              FOUND=$(find . \
                 -type f \
-                -path "*/${lib}/__init__.py" \
-                ! -path "*/.git/*" \
+                -path "*/${LIB}/__init__.py" \
+                ! -path "./.git/*" \
                 | head -n 1 || true)
-
-              if [ -n "$candidate" ]; then
-                found="$candidate"
-              fi
             fi
 
-            if [ -z "$found" ]; then
-              echo "::error::Ilus library '$lib' was imported but was not found in the GitHub repository."
+            if [ -z "$FOUND" ]; then
+              echo
+              echo "::error::Ilus library '$LIB' was not found in the repository."
+              echo
+              echo "The following files were searched:"
+              echo "  ${LIB}.ilus"
+              echo "  ${LIB}.py"
+              echo "  ${LIB}/__init__.ilus"
+              echo "  ${LIB}/__init__.py"
               exit 1
             fi
 
-            echo "Found: $found"
+            echo "  FOUND: $FOUND"
 
-          done < "$IMPORTS_FILE"
+          done < "$IMPORT_FILE"
 
-          rm -f "$IMPORTS_FILE"
-
-          echo
-          echo "=== Final build project ==="
-          find build_project -maxdepth 4 -type f | sort
-
-      # ---------------------------------------------------------
-      # 7. Download official PySide6 Android wheels
-      #
-      # qtpip is the mechanism documented by Qt for downloading
-      # the Android PySide6/Shiboken wheels.
-      # ---------------------------------------------------------
-      - name: Download PySide6 Android wheels
-        working-directory: build_project
-        run: |
-          set -e
-
-          mkdir -p android_wheels
-
-          echo "Downloading official PySide6 Android wheel..."
-
-          qtpip download PySide6 \
-            --android \
-            --arch aarch64 \
-            --dest android_wheels
+          rm -f "$IMPORT_FILE"
 
           echo
-          echo "=== Android wheels ==="
-          ls -lh android_wheels
+          echo "All Ilus imports resolved."
 
-          PYSIDE_WHEEL=$(find android_wheels \
-            -maxdepth 1 \
-            -type f \
-            -name "PySide6-*.whl" \
-            | head -n 1)
 
-          SHIBOKEN_WHEEL=$(find android_wheels \
-            -maxdepth 1 \
-            -type f \
-            -name "shiboken6-*.whl" \
-            | head -n 1)
-
-          if [ -z "$PYSIDE_WHEEL" ]; then
-            echo "::error::PySide6 Android wheel was not downloaded."
-            exit 1
-          fi
-
-          if [ -z "$SHIBOKEN_WHEEL" ]; then
-            echo "::error::Shiboken6 Android wheel was not downloaded."
-            exit 1
-          fi
-
-          echo "PySide6 wheel:"
-          echo "$PYSIDE_WHEEL"
-
-          echo "Shiboken6 wheel:"
-          echo "$SHIBOKEN_WHEEL"
-
-          echo "PYSIDE_WHEEL=$PWD/$PYSIDE_WHEEL" >> "$GITHUB_ENV"
-          echo "SHIBOKEN_WHEEL=$PWD/$SHIBOKEN_WHEEL" >> "$GITHUB_ENV"
-
-      # ---------------------------------------------------------
-      # 8. Download Android SDK + NDK required by Qt 6.8
-      # ---------------------------------------------------------
-      - name: Download Android SDK and NDK
+      # =========================================================
+      # 9. Əgər əsas .ilus faylı subdirectory-dədirsə,
+      #    onu build root-a gətir
+      #
+      # APK runtime üçün əsas proqramı:
+      #
+      #     main.ilus
+      #
+      # kimi saxlayırıq.
+      # =========================================================
+      - name: Prepare Ilus entry file
         working-directory: build_project
+        shell: bash
         run: |
           set -e
 
-          python -m pip install --upgrade \
-            "PySide6==6.8.2.1"
+          cp "$ILUS_FILE" main.ilus
 
-          python -m pip show PySide6
+          echo "Runtime Ilus entry:"
+          echo "main.ilus"
 
-          echo "Running Qt's Android prerequisite downloader..."
+          echo
+          echo "=== main.ilus ==="
+          cat main.ilus
 
-          python -m pip install \
-            "pyside6==6.8.2.1"
+
+      # =========================================================
+      # 10. main.py yoxlanışı
+      #
+      # Bu sənin Ilus interpreter-indir.
+      # =========================================================
+      - name: Check Ilus interpreter
+        working-directory: build_project
+        shell: bash
+        run: |
+          set -e
+
+          if [ ! -f "main.py" ]; then
+            echo "::error::Ilus interpreter main.py was not found."
+            exit 1
+          fi
+
+          echo "Ilus interpreter found:"
+          ls -lh main.py
+
+
+      # =========================================================
+      # 11. PySide6 Android deployment spec yarat
+      # =========================================================
+      - name: Create deployment spec
+        working-directory: build_project
+        shell: bash
+        run: |
+          set -e
+
+          cat > pysidedeploy.spec <<EOF
+[app]
+title = Ilus
+input_file = main.py
+output_dir = deployment
+android_deployment_target = 34
+EOF
+
+          echo "=== pysidedeploy.spec ==="
+          cat pysidedeploy.spec
+
+
+      # =========================================================
+      # 12. PySide6 Android deployment
+      #
+      # Qt-nin öz deployment tool-u istifadə olunur.
+      # =========================================================
+      - name: Build Android application
+        working-directory: build_project
+        shell: bash
+        run: |
+          set -e
+
+          echo "Starting PySide6 Android deployment..."
 
           pyside6-android-deploy \
-            --help > /dev/null
+            --name Ilus \
+            --input main.py
 
-          # Qt's official helper is shipped with pyside-setup.
-          git clone --depth 1 \
-            https://code.qt.io/pyside/pyside-setup.git \
-            /tmp/pyside-setup
 
-          python /tmp/pyside-setup/tools/cross_compile_android/main.py \
-            --download-only \
-            --skip-update \
-            --auto-accept-license
-
-      # ---------------------------------------------------------
-      # 9. Prepare pysidedeploy.spec
-      # ---------------------------------------------------------
-      - name: Prepare PySide deployment
+      # =========================================================
+      # 13. APK-ni tap
+      # =========================================================
+      - name: Find APK
         working-directory: build_project
+        shell: bash
         run: |
           set -e
 
-          echo "=== Android environment ==="
-          find "$HOME/.pyside6-android-deploy" \
-            -maxdepth 3 \
-            -type d 2>/dev/null | head -n 50 || true
-
-          NDK_PATH=$(find "$HOME/.pyside6-android-deploy" \
-            -type d \
-            -name "26.1.10909125" \
-            | head -n 1 || true)
-
-          SDK_PATH=$(find "$HOME/.pyside6-android-deploy" \
-            -type d \
-            -name "sdk" \
-            | head -n 1 || true)
-
-          if [ -z "$NDK_PATH" ]; then
-            echo "::error::Qt NDK 26.1.10909125 was not found."
-            exit 1
-          fi
-
-          if [ -z "$SDK_PATH" ]; then
-            SDK_PATH=$(find "$HOME/.pyside6-android-deploy" \
-              -type d \
-              -name "android-sdk" \
-              | head -n 1 || true)
-          fi
-
-          if [ -z "$SDK_PATH" ]; then
-            echo "::error::Android SDK was not found."
-            exit 1
-          fi
-
-          echo "NDK_PATH=$NDK_PATH"
-          echo "SDK_PATH=$SDK_PATH"
-
-          echo "NDK_PATH=$NDK_PATH" >> "$GITHUB_ENV"
-          echo "SDK_PATH=$SDK_PATH" >> "$GITHUB_ENV"
-
-      # ---------------------------------------------------------
-      # 10. Build APK
-      #
-      # pyside6-android-deploy requires main.py.
-      #
-      # We keep the user's Ilus interpreter as main.py.
-      # test.ilus is included in the application source.
-      # ---------------------------------------------------------
-      - name: Build Ilus APK
-        working-directory: build_project
-        run: |
-          set -e
-
-          echo "=== Starting PySide6 Android deployment ==="
-
-          pyside6-android-deploy \
-            --name "Ilus" \
-            --wheel-pyside="$PYSIDE_WHEEL" \
-            --wheel-shiboken="$SHIBOKEN_WHEEL" \
-            --ndk-path="$NDK_PATH" \
-            --sdk-path="$SDK_PATH"
-
-      # ---------------------------------------------------------
-      # 11. Find APK
-      # ---------------------------------------------------------
-      - name: Locate APK
-        working-directory: build_project
-        run: |
-          set -e
-
-          echo "=== Searching for APK ==="
+          echo
+          echo "========================================"
+          echo "Searching for generated APK"
+          echo "========================================"
 
           find . \
             -type f \
-            \( -name "*.apk" -o -name "*.aab" \) \
+            -name "*.apk" \
             -print
 
           APK=$(find . \
@@ -379,20 +378,24 @@ jobs:
             | head -n 1 || true)
 
           if [ -z "$APK" ]; then
+            echo
             echo "::error::APK was not generated."
             exit 1
           fi
 
-          echo "APK found:"
+          echo
+          echo "APK:"
           echo "$APK"
 
           mkdir -p ../artifacts
+
           cp "$APK" ../artifacts/Ilus.apk
 
-      # ---------------------------------------------------------
-      # 12. Upload APK
-      # ---------------------------------------------------------
-      - name: Upload Ilus APK
+
+      # =========================================================
+      # 14. APK-ni GitHub Actions artifact kimi saxla
+      # =========================================================
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Ilus-APK
