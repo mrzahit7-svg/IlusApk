@@ -60,7 +60,7 @@ jobs:
           }
 
           test -f test.ilus || {
-            echo "::error::test.ilus not found"
+            echo "::error::math.ilus not found"
             exit 1
           }
 
