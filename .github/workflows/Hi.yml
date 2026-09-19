@@ -2,407 +2,399 @@ name: Build Ilus APK
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
-  build:
+  build-apk:
     runs-on: ubuntu-22.04
 
     steps:
-
-      # --------------------------------------------------
+      # ---------------------------------------------------------
       # 1. Repository
-      # --------------------------------------------------
-      - name: Checkout
+      # ---------------------------------------------------------
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-
-      # --------------------------------------------------
+      # ---------------------------------------------------------
       # 2. Python
-      # --------------------------------------------------
-      - name: Setup Python
+      # PySide6 6.8.2.1 + qtpip + deployment tool
+      # ---------------------------------------------------------
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # ---------------------------------------------------------
+      # 3. Java
+      # ---------------------------------------------------------
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
 
-      # --------------------------------------------------
-      # 3. Linux dependencies
-      # --------------------------------------------------
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-
-          sudo apt-get install -y \
-            git \
-            build-essential \
-            cmake \
-            ninja-build \
-            pkg-config \
-            autoconf \
-            automake \
-            libtool \
-            unzip \
-            zip
-
-
-      # --------------------------------------------------
-      # 4. Find Ilus interpreter
-      # --------------------------------------------------
-      - name: Find main.py
-        shell: bash
-        run: |
-          set -e
-
-          MAIN_PY=$(find . \
-            -type f \
-            -name "main.py" \
-            -not -path "./.git/*" \
-            | head -n 1)
-
-          if [ -z "$MAIN_PY" ]; then
-            echo "ERROR: main.py not found"
-            exit 1
-          fi
-
-          echo "MAIN_PY=$MAIN_PY" >> "$GITHUB_ENV"
-
-          echo "Found interpreter:"
-          echo "$MAIN_PY"
-
-
-      # --------------------------------------------------
-      # 5. Find Ilus application
-      # --------------------------------------------------
-      - name: Find Ilus file
-        shell: bash
-        run: |
-          set -e
-
-          ILUS_FILE=$(find . \
-            -type f \
-            -name "*.ilus" \
-            -not -path "./.git/*" \
-            | head -n 1)
-
-          if [ -z "$ILUS_FILE" ]; then
-            echo "ERROR: No .ilus file found"
-            exit 1
-          fi
-
-          echo "ILUS_FILE=$ILUS_FILE" >> "$GITHUB_ENV"
-
-          echo "Found Ilus program:"
-          echo "$ILUS_FILE"
-
-
-      # --------------------------------------------------
-      # 6. Create deployment project
-      # --------------------------------------------------
-      - name: Prepare project
-        shell: bash
-        run: |
-          set -e
-
-          rm -rf build_project
-          mkdir build_project
-
-          cp "$MAIN_PY" build_project/main.py
-          cp "$ILUS_FILE" build_project/
-
-          echo "=== Project ==="
-          find build_project -maxdepth 1 -type f -print
-
-
-      # --------------------------------------------------
-      # 7. Copy Ilus imports
-      #
-      # import foo
-      #
-      # -> foo.py
-      # OR
-      # -> foo.ilus
-      # --------------------------------------------------
-      - name: Collect Ilus libraries
-        shell: bash
-        run: |
-          set -e
-
-          echo "=== Reading imports ==="
-
-          while IFS= read -r line; do
-
-            if echo "$line" | grep -Eq \
-              '^[[:space:]]*import[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$'
-            then
-
-              MODULE=$(echo "$line" | sed -E \
-                's/^[[:space:]]*import[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*$/\1/')
-
-              echo "Import: $MODULE"
-
-              FILE=""
-
-              if [ -f "$MODULE.py" ]; then
-                FILE="$MODULE.py"
-
-              elif [ -f "$MODULE.ilus" ]; then
-                FILE="$MODULE.ilus"
-
-              else
-                FILE=$(find . \
-                  -type f \
-                  \( -name "$MODULE.py" -o -name "$MODULE.ilus" \) \
-                  -not -path "./.git/*" \
-                  | head -n 1)
-              fi
-
-              if [ -z "$FILE" ]; then
-                echo "WARNING: Library '$MODULE' not found"
-              else
-                echo "Copying $FILE"
-                cp "$FILE" build_project/
-              fi
-
-            fi
-
-          done < "$ILUS_FILE"
-
-          echo
-          echo "=== Final project ==="
-
-          find build_project -maxdepth 1 -type f -print
-
-
-      # --------------------------------------------------
-      # 8. Install deployment tool
-      # --------------------------------------------------
-      - name: Install PySide6 deployment tool
+      # ---------------------------------------------------------
+      # 4. Install PySide6
+      # ---------------------------------------------------------
+      - name: Install PySide6
         run: |
           python -m pip install --upgrade pip
+          python -m pip install "PySide6==6.8.2.1"
 
-          python -m pip install \
-            "PySide6==6.8.2.1"
-
-          python -m pip install \
-            GitPython \
-            packaging \
-            buildozer \
-            jinja2 \
-            pkginfo
-
-
-      # --------------------------------------------------
-      # 9. Get Qt Android deployment helper
-      # --------------------------------------------------
-      - name: Prepare Qt Android tools
+      # ---------------------------------------------------------
+      # 5. Check our two Ilus files
+      # ---------------------------------------------------------
+      - name: Check Ilus project
         shell: bash
         run: |
           set -e
 
-          git clone \
-            --depth 1 \
-            --branch 6.8 \
-            https://code.qt.io/pyside/pyside-setup.git
+          echo "=== Project files ==="
+          find . -maxdepth 3 -type f | sort
 
-          python -m pip install \
-            -r pyside-setup/requirements.txt
+          test -f main.py || {
+            echo "::error::main.py not found"
+            exit 1
+          }
 
-          python -m pip install \
-            -r pyside-setup/tools/cross_compile_android/requirements.txt
+          test -f test.ilus || {
+            echo "::error::test.ilus not found"
+            exit 1
+          }
 
+          echo
+          echo "=== main.py ==="
+          head -n 20 main.py
 
-      # --------------------------------------------------
-      # 10. Download Android SDK + NDK
-      # --------------------------------------------------
-      - name: Download Android SDK and NDK
+          echo
+          echo "=== test.ilus ==="
+          cat test.ilus
+
+      # ---------------------------------------------------------
+      # 6. Find Ilus imports inside .ilus files
+      #
+      # IMPORTANT:
+      # We do NOT download Ilus libraries from the internet.
+      # Libraries must exist inside this GitHub repository.
+      # ---------------------------------------------------------
+      - name: Resolve Ilus libraries
         shell: bash
         run: |
           set -e
 
-          python \
-            pyside-setup/tools/cross_compile_android/main.py \
-            --download-only \
-            --skip-update \
-            --auto-accept-license
+          mkdir -p build_project
 
+          # Copy the complete project into the staging directory.
+          # This means .ilus and .py libraries from the repository
+          # remain available to the Ilus interpreter at runtime.
+          cp -r . build_project
 
-      # --------------------------------------------------
-      # 11. Download REAL Android wheels
+          rm -rf build_project/.git
+          rm -rf build_project/.github
+          rm -rf build_project/.buildozer
+          rm -rf build_project/dist
+
+          echo "=== Searching Ilus imports ==="
+
+          IMPORTS_FILE="build_project/.ilus_imports"
+          : > "$IMPORTS_FILE"
+
+          find build_project -type f -name "*.ilus" \
+            ! -name ".ilus_imports" \
+            -print0 |
+          while IFS= read -r -d '' file; do
+            echo "Scanning: $file"
+
+            grep -E '^[[:space:]]*import[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' "$file" \
+              | sed -E 's/^[[:space:]]*import[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\1/' \
+              >> "$IMPORTS_FILE" || true
+
+            grep -E '^[[:space:]]*from[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+import' "$file" \
+              | sed -E 's/^[[:space:]]*from[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\1/' \
+              >> "$IMPORTS_FILE" || true
+          done
+
+          sort -u "$IMPORTS_FILE" -o "$IMPORTS_FILE"
+
+          echo
+          echo "=== Ilus dependencies ==="
+
+          if [ -s "$IMPORTS_FILE" ]; then
+            cat "$IMPORTS_FILE"
+          else
+            echo "No Ilus imports found."
+          fi
+
+          # -----------------------------------------------------
+          # Resolve every imported library ONLY inside repository
+          # -----------------------------------------------------
+
+          while IFS= read -r lib; do
+            [ -z "$lib" ] && continue
+
+            echo
+            echo "Resolving Ilus library: $lib"
+
+            found=""
+
+            # NAME.ilus
+            candidate=$(find build_project \
+              -type f \
+              -name "${lib}.ilus" \
+              ! -path "*/.git/*" \
+              | head -n 1 || true)
+
+            if [ -n "$candidate" ]; then
+              found="$candidate"
+            fi
+
+            # NAME.py
+            if [ -z "$found" ]; then
+              candidate=$(find build_project \
+                -type f \
+                -name "${lib}.py" \
+                ! -path "*/.git/*" \
+                | head -n 1 || true)
+
+              if [ -n "$candidate" ]; then
+                found="$candidate"
+              fi
+            fi
+
+            # NAME/__init__.ilus
+            if [ -z "$found" ]; then
+              candidate=$(find build_project \
+                -type f \
+                -path "*/${lib}/__init__.ilus" \
+                ! -path "*/.git/*" \
+                | head -n 1 || true)
+
+              if [ -n "$candidate" ]; then
+                found="$candidate"
+              fi
+            fi
+
+            # NAME/__init__.py
+            if [ -z "$found" ]; then
+              candidate=$(find build_project \
+                -type f \
+                -path "*/${lib}/__init__.py" \
+                ! -path "*/.git/*" \
+                | head -n 1 || true)
+
+              if [ -n "$candidate" ]; then
+                found="$candidate"
+              fi
+            fi
+
+            if [ -z "$found" ]; then
+              echo "::error::Ilus library '$lib' was imported but was not found in the GitHub repository."
+              exit 1
+            fi
+
+            echo "Found: $found"
+
+          done < "$IMPORTS_FILE"
+
+          rm -f "$IMPORTS_FILE"
+
+          echo
+          echo "=== Final build project ==="
+          find build_project -maxdepth 4 -type f | sort
+
+      # ---------------------------------------------------------
+      # 7. Download official PySide6 Android wheels
       #
-      # NO qtpip.
-      #
-      # We download the exact Qt 6.8.2.1 Android wheels
-      # directly from Qt's snapshot server.
-      # --------------------------------------------------
+      # qtpip is the mechanism documented by Qt for downloading
+      # the Android PySide6/Shiboken wheels.
+      # ---------------------------------------------------------
       - name: Download PySide6 Android wheels
-        shell: bash
+        working-directory: build_project
         run: |
           set -e
 
           mkdir -p android_wheels
 
-          BASE="https://download.qt.io/snapshots/ci/pyside/6.8.2/latest/pyside6"
+          echo "Downloading official PySide6 Android wheel..."
 
-          PYSIDE_URL="$BASE/PySide6-6.8.2.1-cp39-abi3-android_aarch64.whl"
-          SHIBOKEN_URL="$BASE/shiboken6-6.8.2.1-6.8.2-cp311-cp311-android_aarch64.whl"
-
-          echo "Downloading PySide6 Android wheel..."
-
-          curl -fL \
-            "$PYSIDE_URL" \
-            -o android_wheels/PySide6-android-aarch64.whl
-
-          echo "Downloading Shiboken6 Android wheel..."
-
-          curl -fL \
-            "$SHIBOKEN_URL" \
-            -o android_wheels/shiboken6-android-aarch64.whl
+          qtpip download PySide6 \
+            --android \
+            --arch aarch64 \
+            --dest android_wheels
 
           echo
           echo "=== Android wheels ==="
+          ls -lh android_wheels
 
-          ls -lh android_wheels/
+          PYSIDE_WHEEL=$(find android_wheels \
+            -maxdepth 1 \
+            -type f \
+            -name "PySide6-*.whl" \
+            | head -n 1)
 
+          SHIBOKEN_WHEEL=$(find android_wheels \
+            -maxdepth 1 \
+            -type f \
+            -name "shiboken6-*.whl" \
+            | head -n 1)
 
-      # --------------------------------------------------
-      # 12. Verify wheels
-      # --------------------------------------------------
-      - name: Verify Android wheels
-        shell: bash
-        run: |
-          set -e
+          if [ -z "$PYSIDE_WHEEL" ]; then
+            echo "::error::PySide6 Android wheel was not downloaded."
+            exit 1
+          fi
 
-          test -f \
-            android_wheels/PySide6-android-aarch64.whl
-
-          test -f \
-            android_wheels/shiboken6-android-aarch64.whl
+          if [ -z "$SHIBOKEN_WHEEL" ]; then
+            echo "::error::Shiboken6 Android wheel was not downloaded."
+            exit 1
+          fi
 
           echo "PySide6 wheel:"
-          ls -lh android_wheels/PySide6-android-aarch64.whl
+          echo "$PYSIDE_WHEEL"
 
           echo "Shiboken6 wheel:"
-          ls -lh android_wheels/shiboken6-android-aarch64.whl
+          echo "$SHIBOKEN_WHEEL"
 
+          echo "PYSIDE_WHEEL=$PWD/$PYSIDE_WHEEL" >> "$GITHUB_ENV"
+          echo "SHIBOKEN_WHEEL=$PWD/$SHIBOKEN_WHEEL" >> "$GITHUB_ENV"
 
-      # --------------------------------------------------
-      # 13. Find SDK / NDK
-      # --------------------------------------------------
-      - name: Locate Android SDK and NDK
-        shell: bash
+      # ---------------------------------------------------------
+      # 8. Download Android SDK + NDK required by Qt 6.8
+      # ---------------------------------------------------------
+      - name: Download Android SDK and NDK
+        working-directory: build_project
         run: |
           set -e
 
-          SDK="$HOME/.pyside6_android_deploy/android-sdk"
-          NDK="$HOME/.pyside6_android_deploy/android-ndk/android-ndk-r27c"
+          python -m pip install --upgrade \
+            "PySide6==6.8.2.1"
 
-          if [ ! -d "$SDK" ]; then
-            echo "ERROR: Android SDK not found:"
-            echo "$SDK"
-            exit 1
-          fi
+          python -m pip show PySide6
 
-          if [ ! -d "$NDK" ]; then
-            echo "ERROR: Android NDK not found:"
-            echo "$NDK"
-            exit 1
-          fi
+          echo "Running Qt's Android prerequisite downloader..."
 
-          echo "ANDROID_SDK=$SDK" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK=$NDK" >> "$GITHUB_ENV"
-
-          echo "SDK:"
-          echo "$SDK"
-
-          echo "NDK:"
-          echo "$NDK"
-
-
-      # --------------------------------------------------
-      # 14. Initialize PySide deployment spec
-      # --------------------------------------------------
-      - name: Initialize PySide Android deployment
-        shell: bash
-        run: |
-          set -e
-
-          cd build_project
+          python -m pip install \
+            "pyside6==6.8.2.1"
 
           pyside6-android-deploy \
-            --init \
+            --help > /dev/null
+
+          # Qt's official helper is shipped with pyside-setup.
+          git clone --depth 1 \
+            https://code.qt.io/pyside/pyside-setup.git \
+            /tmp/pyside-setup
+
+          python /tmp/pyside-setup/tools/cross_compile_android/main.py \
+            --download-only \
+            --skip-update \
+            --auto-accept-license
+
+      # ---------------------------------------------------------
+      # 9. Prepare pysidedeploy.spec
+      # ---------------------------------------------------------
+      - name: Prepare PySide deployment
+        working-directory: build_project
+        run: |
+          set -e
+
+          echo "=== Android environment ==="
+          find "$HOME/.pyside6-android-deploy" \
+            -maxdepth 3 \
+            -type d 2>/dev/null | head -n 50 || true
+
+          NDK_PATH=$(find "$HOME/.pyside6-android-deploy" \
+            -type d \
+            -name "26.1.10909125" \
+            | head -n 1 || true)
+
+          SDK_PATH=$(find "$HOME/.pyside6-android-deploy" \
+            -type d \
+            -name "sdk" \
+            | head -n 1 || true)
+
+          if [ -z "$NDK_PATH" ]; then
+            echo "::error::Qt NDK 26.1.10909125 was not found."
+            exit 1
+          fi
+
+          if [ -z "$SDK_PATH" ]; then
+            SDK_PATH=$(find "$HOME/.pyside6-android-deploy" \
+              -type d \
+              -name "android-sdk" \
+              | head -n 1 || true)
+          fi
+
+          if [ -z "$SDK_PATH" ]; then
+            echo "::error::Android SDK was not found."
+            exit 1
+          fi
+
+          echo "NDK_PATH=$NDK_PATH"
+          echo "SDK_PATH=$SDK_PATH"
+
+          echo "NDK_PATH=$NDK_PATH" >> "$GITHUB_ENV"
+          echo "SDK_PATH=$SDK_PATH" >> "$GITHUB_ENV"
+
+      # ---------------------------------------------------------
+      # 10. Build APK
+      #
+      # pyside6-android-deploy requires main.py.
+      #
+      # We keep the user's Ilus interpreter as main.py.
+      # test.ilus is included in the application source.
+      # ---------------------------------------------------------
+      - name: Build Ilus APK
+        working-directory: build_project
+        run: |
+          set -e
+
+          echo "=== Starting PySide6 Android deployment ==="
+
+          pyside6-android-deploy \
             --name "Ilus" \
-            --wheel-pyside="$GITHUB_WORKSPACE/android_wheels/PySide6-android-aarch64.whl" \
-            --wheel-shiboken="$GITHUB_WORKSPACE/android_wheels/shiboken6-android-aarch64.whl" \
-            --sdk-path="$ANDROID_SDK" \
-            --ndk-path="$ANDROID_NDK"
+            --wheel-pyside="$PYSIDE_WHEEL" \
+            --wheel-shiboken="$SHIBOKEN_WHEEL" \
+            --ndk-path="$NDK_PATH" \
+            --sdk-path="$SDK_PATH"
 
-          echo
-          echo "=== Generated spec ==="
-
-          cat pysidedeploy.spec
-
-
-      # --------------------------------------------------
-      # 15. Build APK
-      # --------------------------------------------------
-      - name: Build APK
-        shell: bash
-        run: |
-          set -e
-
-          cd build_project
-
-          pyside6-android-deploy \
-            --config-file pysidedeploy.spec \
-            --wheel-pyside="$GITHUB_WORKSPACE/android_wheels/PySide6-android-aarch64.whl" \
-            --wheel-shiboken="$GITHUB_WORKSPACE/android_wheels/shiboken6-android-aarch64.whl" \
-            --sdk-path="$ANDROID_SDK" \
-            --ndk-path="$ANDROID_NDK" \
-            --force \
-            --keep-deployment-files \
-            --verbose
-
-
-      # --------------------------------------------------
-      # 16. Find APK
-      # --------------------------------------------------
-      - name: Find APK
-        shell: bash
+      # ---------------------------------------------------------
+      # 11. Find APK
+      # ---------------------------------------------------------
+      - name: Locate APK
+        working-directory: build_project
         run: |
           set -e
 
           echo "=== Searching for APK ==="
 
-          APK=$(find build_project \
+          find . \
+            -type f \
+            \( -name "*.apk" -o -name "*.aab" \) \
+            -print
+
+          APK=$(find . \
             -type f \
             -name "*.apk" \
-            | head -n 1)
+            | head -n 1 || true)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: APK was not generated."
-
-            echo
-            echo "=== Build directory ==="
-
-            find build_project \
-              -maxdepth 5 \
-              -type f \
-              | head -n 200
-
+            echo "::error::APK was not generated."
             exit 1
           fi
 
           echo "APK found:"
           echo "$APK"
 
-          cp "$APK" "$GITHUB_WORKSPACE/Ilus.apk"
+          mkdir -p ../artifacts
+          cp "$APK" ../artifacts/Ilus.apk
 
-
-      # --------------------------------------------------
-      # 17. Upload APK
-      # --------------------------------------------------
-      - name: Upload APK
+      # ---------------------------------------------------------
+      # 12. Upload APK
+      # ---------------------------------------------------------
+      - name: Upload Ilus APK
         uses: actions/upload-artifact@v4
         with:
           name: Ilus-APK
-          path: Ilus.apk
+          path: artifacts/Ilus.apk
+          if-no-files-found: error
